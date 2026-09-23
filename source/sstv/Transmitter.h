@@ -49,6 +49,8 @@ public:
 	int CurrentMode() const { return modeIndex; }
 	/// False until the first source frame: the timeline holds at sample 0.
 	bool HasSource() const { return hasSource; }
+	/// The latest source frame, RGBA8, row 0 at the top, for the harness.
+	const std::vector< uint8_t >& SourceImage() const { return liveImage; }
 	int TxWidth() const { return Mode( modeIndex ).width; }
 	int TxHeight() const { return Mode( modeIndex ).height; }
 	/// Samples into the current picture, counting from the first VIS sample.

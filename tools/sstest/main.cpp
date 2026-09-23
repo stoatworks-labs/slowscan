@@ -1921,6 +1921,52 @@ int runRender( int w, int h, int rowOffset )
 	}
 
 	//------------------------------------------------------------------
+	// The readback hands the station the clip the right way up. Every
+	// check on the chain sets its source directly, so this is the one
+	// place the readback shader and the pixel-pack path are tested: a
+	// quadrant card -- red, green / blue, white, top row first -- must arrive
+	// at the transmitter with each quadrant exactly its primary, away from
+	// the two boundaries by two picture pixels (the box filter's footprint
+	// is at most one; the second is for the bilinear taps either side).
+	//------------------------------------------------------------------
+	{
+		std::vector< unsigned char > quad( static_cast< size_t >( w ) * h * 4, 0 );
+		for( int y = 0; y < h; ++y )
+			for( int x = 0; x < w; ++x )
+			{
+				const bool right = x >= w / 2, bottom = y >= h / 2;
+				const float r = ( !bottom && !right ) || ( bottom && right ) ? 1.0f : 0.0f;
+				const float g = ( !bottom && right ) || ( bottom && right ) ? 1.0f : 0.0f;
+				const float b = bottom ? 1.0f : 0.0f;
+				setPixel( quad, w, h, x, y, r, g, b );
+			}
+		const GLuint quadInput = makeInput( quad, w, h );
+		Instance i( w, h );
+		for( int f = 0; f < 3; ++f )
+			render( i, target, quadInput, w, h, f / 60.0 );
+		const Transmitter& tx          = i.plugin.EngineForTest().Tx();
+		const std::vector< uint8_t >& src = tx.SourceImage();
+		const int tw = tx.TxWidth(), th = tx.TxHeight();
+		int wrong = 0, probed = 0;
+		for( int y = 0; y < th; ++y )
+			for( int x = 0; x < tw; ++x )
+			{
+				if( std::abs( 2 * x + 1 - tw ) <= 4 || std::abs( 2 * y + 1 - th ) <= 4 )
+					continue;//within two pixels of a boundary
+				const bool right = x >= tw / 2, bottom = y >= th / 2;
+				const int r = ( !bottom && !right ) || ( bottom && right ) ? 255 : 0;
+				const int g = right ? 255 : 0;
+				const int b = bottom ? 255 : 0;
+				const uint8_t* p = src.data() + ( static_cast< size_t >( y ) * tw + x ) * 4;
+				++probed;
+				if( src.size() != static_cast< size_t >( tw ) * th * 4 || p[ 0 ] != r || p[ 1 ] != g || p[ 2 ] != b )
+					++wrong;
+			}
+		Check( probed > 0 && wrong == 0, "the readback hands the station the clip the right way up: red, green over blue, white, each exact (" + std::to_string( probed ) + " pixels, " + std::to_string( wrong ) + " wrong)" );
+		glDeleteTextures( 1, &quadInput );
+	}
+
+	//------------------------------------------------------------------
 	// Fill: the rect is the whole output, and the cursor is off.
 	//------------------------------------------------------------------
 	{
