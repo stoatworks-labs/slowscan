@@ -165,6 +165,8 @@ if(SLOWSCAN_BUILD_TOOLS AND APPLE)
     add_test(NAME names       COMMAND sstest --names)
     add_test(NAME negative    COMMAND sstest --negative)
     add_test(NAME render      COMMAND sstest --render)
+    add_test(NAME raster      COMMAND sstest --raster)
+    add_test(NAME offline     COMMAND sstest --offline)
 endif()
 
 # ---------------------------------------------------------------------------

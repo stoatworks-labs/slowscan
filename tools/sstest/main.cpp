@@ -1336,8 +1336,8 @@ int runSync( bool lineSync )
 		//pixel grid, each 1/pxS pixels: 0.4 px. The drift inside a line is
 		//the same on every line and so contributes nothing to the spread.
 		const double bound = 2.0 / pixelSamples( mode );
-		Check( missing == 0 && hi - lo <= 1.0,
-		       std::string( m.name ) + " at " + F( kPpm, 0 ) + " ppm: the edge stays within " + F( hi - lo, 3 ) + " px over the frame (Free-run would drift " + F( freeRun, 1 ) + "; one pixel asked, " + F( bound, 2 ) + " derived)" );
+		Check( missing == 0 && hi - lo <= std::min( 1.0, bound ),
+		       std::string( m.name ) + " at " + F( kPpm, 0 ) + " ppm: the edge stays within " + F( hi - lo, 3 ) + " px over the frame (Free-run would drift " + F( freeRun, 1 ) + "; the spec asks one pixel, the derived bound " + F( bound, 2 ) + " is asserted)" );
 		Check( std::fabs( slope * ( m.height - 1 ) ) <= 1.0,
 		       std::string( m.name ) + ": the fitted lean over the frame is " + F( slope * ( m.height - 1 ), 3 ) + " px, under one" );
 		//One per line. Scottie's lead-in pulse ends where the picture begins,
@@ -2400,6 +2400,11 @@ void usage()
 		"  --render          the frame against the decoder's picture, byte for byte\n"
 		"  --raster          the lean fitted in the rendered frame\n"
 		"  --negative        break the model and prove every check fails\n"
+		"\n"
+		"  --offline         every check that needs no GL, and the negative controls\n"
+		"                    that need none; says loudly what it skipped. For CI.\n"
+		"  --allow-no-gl     with the rendering checks: SKIP loudly, not FAIL, when\n"
+		"                    no GL 4.1 context can be created at all\n"
 		"  --bench           720p, 1080p and 4K\n" );
 }
 } // namespace
@@ -2486,6 +2491,24 @@ int main( int argc, char** argv )
 		return 2;
 	}
 
+	//--offline is every check that needs no GL context, defined HERE, in the
+	//one place that knows which those are: a GitHub macOS runner cannot
+	//create an accelerated context, and a workflow that listed the wanted
+	//groups itself would go stale the first time a group was added.
+	bool allowNoGL = false;
+	{
+		std::vector< std::string > expanded;
+		for( const std::string& mode : modes )
+			if( mode == "--offline" )
+				for( const char* m : { "--timing", "--slant", "--levels", "--threshold", "--progressive", "--vis", "--sync", "--clock", "--names", "--negative-offline" } )
+					expanded.push_back( m );
+			else if( mode == "--allow-no-gl" )
+				allowNoGL = true;
+			else
+				expanded.push_back( mode );
+		modes = expanded;
+	}
+
 	if( !modes.empty() )
 	{
 		for( const std::string& mode : modes )
@@ -2512,6 +2535,13 @@ int main( int argc, char** argv )
 			else if( mode == "--clock" )       runClock( false );
 			else if( mode == "--names" )       runNames();
 			else if( mode == "--engine" )      runEngineBench();
+			else if( mode == "--negative-offline" )
+			{
+				runNegative( width, height, false );
+				std::printf( "\n   OFFLINE: --render, --raster and their negative controls were NOT run.\n"
+				             "   Nothing here drew a pixel through a GL driver; the shaders were not\n"
+				             "   exercised, only (in CI) compiled by glslc.\n" );
+			}
 			else if( mode == "--render" || mode == "--raster" || mode == "--negative" )
 				needGL = true;
 			else
@@ -2519,7 +2549,7 @@ int main( int argc, char** argv )
 				std::fprintf( stderr, "sstest: unknown mode '%s'\n", mode.c_str() );
 				return 2;
 			}
-			if( static_cast< size_t >( g_checks ) != before && mode != "--names" && mode != "--clock" )
+			if( static_cast< size_t >( g_checks ) != before && mode != "--names" && mode != "--clock" && mode != "--negative-offline" )
 				std::printf( "   (raster-free: measured in the decoder's own %s picture; --size %dx%d does not enter)\n", "320xN", width, height );
 			if( !needGL )
 				std::printf( "\n" );
@@ -2528,7 +2558,12 @@ int main( int argc, char** argv )
 		if( needGL )
 		{
 			CGLContextObj context = createContext();
-			if( context == nullptr )
+			if( context == nullptr && allowNoGL )
+			{
+				std::printf( "   SKIP  could not create an OpenGL 4.1 core context, accelerated or software.\n"
+				             "         --render, --raster and the GL negative controls were NOT run.\n" );
+			}
+			else if( context == nullptr )
 			{
 				std::printf( "   FAIL  could not create an OpenGL 4.1 core context\n" );
 				++g_failures;

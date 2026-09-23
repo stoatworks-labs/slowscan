@@ -1,0 +1,107 @@
+name: ci
+
+# Both platforms on every push and pull request, so a Dependabot bump has a
+# status check to gate on and a GLEW-shaped break -- which macOS is
+# structurally blind to, because macOS never links GLEW -- is caught before a
+# tag. There is no Linux job: the CMakeLists branches on APPLE and WIN32.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The FFGL SDK is a submodule. Without this CMake fails at configure
+          # time with a missing-directory error that reads like a broken repo.
+          submodules: recursive
+
+      - name: Configure
+        # arm64 only, unlike the release build's universal arm64;x86_64 -- the
+        # second slice doubles the build for no extra signal, because a source
+        # break is not architecture-specific.
+        #
+        # SLOWSCAN_BUILD_TOOLS is ON here where the release build turns it OFF:
+        # sstest is the only place the physics is written down as a number,
+        # so compiling and running it is most of the value.
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          -DSLOWSCAN_BUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Parameters
+        # No GL needed, so this one cannot be a runner problem.
+        run: ./build/sstest --list
+
+      - name: Shaders
+        # A GitHub macOS runner cannot create an accelerated GL context, so
+        # this is where CI looks at the GLSL: every shipped shader through
+        # glslc, by the same script verify.sh runs.
+        run: |
+          brew install shaderc
+          tools/check-shaders.sh
+
+      - name: The chain
+        # --offline is every check that needs no GL -- the chain is CPU code,
+        # stepped directly -- and it is defined in sstest's main(), not listed
+        # here, so a new check cannot be silently left out. It says loudly
+        # what it did not run.
+        timeout-minutes: 10
+        run: ./build/sstest --offline
+
+      - name: Rendered
+        # If the runner can make a software 4.1 context these run at
+        # 320x180, the raster verify.sh also runs locally; if it cannot,
+        # --allow-no-gl turns the failure into a loud SKIP rather than a red
+        # build that says nothing about the plugin. They always run on the
+        # dev Mac, in tools/verify.sh.
+        timeout-minutes: 20
+        run: ./build/sstest --render --raster --negative --size 320x180 --allow-no-gl
+
+      - name: Controls
+        # At 160x90 and two at a time, because a software rasteriser is slow
+        # and the question is only whether a control changed ANY subpixel.
+        timeout-minutes: 25
+        run: python3 tools/sweep.py --binary build/sstest --size 160x90 --jobs 2 --allow-no-gl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slowscan-macos-arm64
+          path: build/*.bundle
+          if-no-files-found: error
+
+  windows:
+    name: Windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        # The toolchain path MUST stay double-quoted: a `run:` step on Windows
+        # is PowerShell, and unquoted this expands to nothing.
+        run: >
+          cmake -B build -A x64
+          -DCMAKE_BUILD_TYPE=Release
+          -DSLOWSCAN_BUILD_TOOLS=OFF
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slowscan-windows-x86_64
+          path: build/Release/*.dll
+          if-no-files-found: error

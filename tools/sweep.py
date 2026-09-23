@@ -174,6 +174,8 @@ def main():
     ap.add_argument("--binary", default=str(ROOT / "build" / "sstest"))
     ap.add_argument("--size", default="%dx%d" % (WIDTH, HEIGHT))
     ap.add_argument("--jobs", type=int, default=0)
+    ap.add_argument("--allow-no-gl", action="store_true",
+                    help="SKIP loudly, not FAIL, when the harness cannot create a GL context (CI)")
     args = ap.parse_args()
     if "x" in args.size:
         WIDTH, HEIGHT = (int(v) for v in args.size.split("x", 1))
@@ -185,6 +187,17 @@ def main():
         return 1
 
     scratch = tempfile.mkdtemp(prefix="sssweep")
+
+    # One render first: a runner with no GL at all cannot sweep anything,
+    # and that has to read as a skip, loudly, not as twenty dead controls.
+    probe = subprocess.run([binary, "--out", f"{scratch}/probe.png", "--size", "16x16", "--frames", "1"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0 and "could not create an OpenGL" in (probe.stdout + probe.stderr):
+        print("NO GL CONTEXT: the sweep could not render at all.")
+        if args.allow_no_gl:
+            print("SKIPPED (--allow-no-gl): no control was checked for liveness on this machine.")
+            return 0
+        return 1
 
     skipped = []
     work = []
