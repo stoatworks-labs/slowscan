@@ -1113,7 +1113,7 @@ int runThreshold( double snrOffsetDb )
 //---------------------------------------------------------------------------
 /// --progressive: after t seconds at Speed s, floor( t s / T_line ) lines.
 //---------------------------------------------------------------------------
-int runProgressive( double speedError, bool fadeTimesSpeed )
+int runProgressive( double speedError, bool fadeTimesSpeed, bool keepColourModel = false )
 {
 	Say( "progressive: lines replaced against floor( t * s / T_line )\n\n" );
 
@@ -1227,6 +1227,96 @@ int runProgressive( double speedError, bool fadeTimesSpeed )
 				++differ;
 		Check( ran[ 0 ] == ran[ 1 ] && differ == 0,
 		       "Speed changes nothing per sample: 24 lines of a noisy, fading, multipath, QRM'd picture at 1x and at 120x are bit-identical (" + std::to_string( differ ) + " of " + std::to_string( planes[ 0 ].size() ) + " pixels differ)" );
+	}
+
+	//------------------------------------------------------------------
+	// A mode change keeps the old picture on screen, in its own colours.
+	// Martin and Scottie keep R, G, B planes; Robot 36 keeps Y, R-Y, B-Y.
+	// The draft kept the planes as they were, so a switch to Robot showed the
+	// Martin picture green and magenta until the Robot picture had painted
+	// over all of it (37 s at 1x), and a switch back showed Robot's planes as
+	// RGB. The composite of every row not yet repainted is compared before
+	// and after the change. Bound: one 8-bit code -- the flat field's own
+	// decode error (0.275 of a code, --levels), the 601 matrices' three-
+	// decimal inverse (under 0.1), and the composite's rounding (0.5).
+	//------------------------------------------------------------------
+	{
+		auto colourSource = [ & ]( int w, int h, int r, int g, int b ) {
+			std::vector< uint8_t > img( static_cast< size_t >( w ) * h * 4, 255 );
+			for( size_t i = 0; i < img.size(); i += 4 )
+			{
+				img[ i ]     = static_cast< uint8_t >( r );
+				img[ i + 1 ] = static_cast< uint8_t >( g );
+				img[ i + 2 ] = static_cast< uint8_t >( b );
+			}
+			return img;
+		};
+		//Worst difference, in codes, over rows [from, to) of two composites
+		//of the given width.
+		auto worst = [ & ]( const std::vector< uint8_t >& a, const std::vector< uint8_t >& b, int w, int from, int to ) {
+			int d = 0;
+			for( size_t i = static_cast< size_t >( from ) * w * 3; i < static_cast< size_t >( to ) * w * 3; ++i )
+				d = std::max( d, std::abs( int( a[ i ] ) - int( b[ i ] ) ) );
+			return d;
+		};
+		const ModeSpec& robotM = Mode( kRobot36 );
+		const std::vector< uint8_t > warm = colourSource( 320, 256, 200, 60, 30 );
+		const std::vector< uint8_t > cool = colourSource( 320, 240, 30, 60, 200 );
+		std::vector< uint8_t > before, after;
+
+		//Between pictures: the mode applies at once, through SetParams.
+		{
+			Engine e;
+			EngineParams p = cleanParams( kMartinM1 );
+			e.SetParams( p );
+			e.Rx().DebugKeepColourModel( keepColourModel );
+			e.SetSource( warm.data(), 320, 256 );
+			runOnePicture( e );
+			e.Rx().Composite( before );
+			p.mode = kRobot36;
+			e.SetParams( p );
+			e.Rx().Composite( after );
+			const int d = worst( before, after, 320, 0, robotM.height );
+			Check( e.Rx().PictureMode() == kRobot36 && d <= 1,
+			       "a mode change keeps the old picture: Martin M1 to Robot 36 between pictures, worst " + std::to_string( d ) + " codes over 320x240 (bound 1)" );
+		}
+
+		//With a picture in progress: the change lands at the next picture.
+		{
+			Engine e;
+			EngineParams p = cleanParams( kMartinM1 );
+			e.SetParams( p );
+			e.Rx().DebugKeepColourModel( keepColourModel );
+			e.SetSource( warm.data(), 320, 256 );
+			runOnePicture( e );
+			e.Run( static_cast< int >( Engine::LineStartSample( kMartinM1, 20 ) ) );//into the next
+			e.Rx().Composite( before );
+			p.mode = kRobot36;
+			e.SetParams( p );
+			e.Restart();
+			e.SetSource( cool.data(), 320, 240 );
+			e.Run( static_cast< int >( Engine::LineStartSample( kRobot36, 10 ) ) );
+			e.Rx().Composite( after );
+			const int d = worst( before, after, 320, 40, robotM.height );
+			Check( e.Rx().PictureMode() == kRobot36 && e.Rx().InPicture() && e.Rx().Line() < 40 && d <= 1,
+			       "a mode change keeps the old picture: Martin M1 to Robot 36 on a restart, worst " + std::to_string( d ) + " codes on the rows not yet repainted (bound 1)" );
+
+			//...and back, once the Robot picture has painted the whole frame.
+			runOnePicture( e );
+			e.Rx().Composite( before );
+			p.mode = kMartinM1;
+			e.SetParams( p );
+			e.Restart();
+			e.SetSource( warm.data(), 320, 256 );
+			e.Run( static_cast< int >( Engine::LineStartSample( kMartinM1, 10 ) ) );
+			e.Rx().Composite( after );
+			const int d2 = worst( before, after, 320, 40, robotM.height );
+			int below = 0;//rows Robot's picture never had: black
+			for( size_t i = static_cast< size_t >( robotM.height ) * 320 * 3; i < after.size(); ++i )
+				below = std::max( below, int( after[ i ] ) );
+			Check( e.Rx().PictureMode() == kMartinM1 && e.Rx().Line() < 40 && d2 <= 1 && below == 0,
+			       "a mode change keeps the old picture: Robot 36 to Martin M1 on a restart, worst " + std::to_string( d2 ) + " codes on the rows not yet repainted (bound 1), rows 240-255 black (max " + std::to_string( below ) + ")" );
+		}
 	}
 	return g_failures;
 }
@@ -2282,6 +2372,7 @@ int runNegative( int w, int h, bool withGL )
 		{ "threshold: the SNR stated in 1.5 kHz, not 3 (3 dB)", "linearised closed form", false, [] { runThreshold( 3.0 ); } },
 		{ "progressive: the signal run 1% fast", "rows replaced", false, [] { runProgressive( 0.01, false ); } },
 		{ "progressive: the fade rate multiplied by Speed", "Speed changes nothing per sample", false, [] { runProgressive( 0.0, true ); } },
+		{ "progressive: the planes kept as they were when the colour model changes", "keeps the old picture", false, [] { runProgressive( 0.0, false, true ); } },
 		{ "vis: the parity bit sent wrong", "decoded", false, [] { runVis( true ); } },
 		{ "vis: the manual start clamped to the line's start", "a manual start", false, [] { runVis( false, true ); } },
 		{ "sync: Line Sync switched off", "stays within", false, [] { runSync( false ); } },

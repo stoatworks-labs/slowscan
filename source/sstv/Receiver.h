@@ -124,6 +124,10 @@ public:
 	void DebugIgnoreParity( bool on ) { debugIgnoreParity = on; }
 	/// Negative control: no lowpass at all.
 	void DebugBypassLowpass( bool on ) { debugBypassLowpass = on; }
+	/// Negative control: keep the planes as they are when the colour model
+	/// changes (RGB to Robot's YCbCr or back), as the draft did. `--progressive`
+	/// must see the old picture change colour.
+	void DebugKeepColourModel( bool on ) { debugKeepColourModel = on; }
 
 private:
 	void buildFir();
@@ -210,6 +214,7 @@ private:
 	bool debugIgnoreClock   = false;
 	bool debugIgnoreParity  = false;
 	bool debugBypassLowpass = false;
+	bool debugKeepColourModel = false;
 };
 
 } // namespace slowscan::sstv

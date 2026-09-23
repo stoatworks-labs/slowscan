@@ -11,7 +11,7 @@
 > linearised discriminator's closed form to 2%, and the knee is where Rice's click
 > rate puts it. The VIS header decodes back to the mode it was sent in, Line Sync
 > takes a 75-pixel slant down to a quarter of a pixel, and Speed changes nothing
-> per sample, bit for bit. Thirteen negative controls prove the checks can fail. It
+> per sample, bit for bit. Fourteen negative controls prove the checks can fail. It
 > has **never been loaded into Resolume**. It is loaded by
 > [oxbow](https://github.com/stoatworks-labs/oxbow), which is a real FFGL host and
 > is not Resolume. See [Status](#status).
@@ -114,13 +114,13 @@ universal Release build, running every check at **two rasters**, 320×180 and
 | `--slant` | at ±100 and ±300 ppm the fitted lean is within **5e-5 px/line** of `e × T_line / T_pixel` in Martin M1 and Scottie S1, against a tolerance of 0.0023 (one sample through the fit); a whole-pixel drift of 40 moves the thresholded edge 40 columns, a fractional 40.5 moves it 40 or 41 |
 | `--levels` | flat black, grey and white come back to the exact 8-bit value (180,090 samples); a ramp is within 0.0027 of its closed form (bound 0.0051); an edge's tail decays with τ = **5.797 px** against the one-pole's 5.797 |
 | `--threshold` | above the knee the pixel variance is **within 2%** of the linearised discriminator's closed form, computed from the receiver's own filters (tolerance 5.7–7.1%, four standard errors plus 1/CNR); the knee, 1 dB over the linear law, measured at **3.70 dB** SNR against Rice's **3.11 dB** (tolerance 2.78 dB, derived from the model's two approximations) |
-| `--progressive` | at 1x, 40x and 120x, every asserted frame had exactly `floor( t s / T_line )` lines replaced (789 frames); 24 lines of a noisy, fading, multipath picture at 1x and 120x are **bit-identical** |
+| `--progressive` | at 1x, 40x and 120x, every asserted frame had exactly `floor( t s / T_line )` lines replaced (789 frames); 24 lines of a noisy, fading, multipath picture at 1x and 120x are **bit-identical**; a mode change from Martin M1 to Robot 36 and back leaves the old picture's colours within one code until the new picture paints over it |
 | `--vis` | VIS 44, 60 and 8 decode back to Martin, Scottie and Robot with no manual start, line 0 placed within 1 sample; a header sent with the wrong parity is a manual start that lands 0 samples from where a decoded one would; Auto VIS decodes three pictures in turn |
 | `--sync` | at 300 ppm, where Free-run would drift 75 px, Line Sync holds the edge within **0.24 px** (bound 0.40, derived), one sync pulse per line, no jumps |
 | `--clock` | 600 frames at t = 0 and at t = 499,217 s ask for the same running sample total to one sample; the same subtraction in a float gets 599 of 599 frame durations wrong |
 | `--render` | every resolvable probe of the frame is the decoder's pixel, byte for byte, cursor included; the letterbox is transparent black; the readback hands the station the clip the right way up; Mix 0 is the clip byte for byte; a resize mid-run keeps every row not being written |
 | `--raster` | the lean fitted in the **rendered** frame at ±150 ppm is 0.14637 px/line against 0.14634 at 1280×720 (tolerance 0.018) and 0.14684 at 320×180 (tolerance 0.030) |
-| `--negative` | thirteen broken models, each failing the bound that should catch it: a 50 ppm line, the clock term dropped (twice, CPU and rendered), the tone's phase reset per pixel, no lowpass, the SNR stated 3 dB wrong, the signal 1% fast, the fade rate multiplied by Speed, a wrong parity bit, a manual start a group delay early, Line Sync off, a float clock, the picture uploaded a row low |
+| `--negative` | fourteen broken models, each failing the bound that should catch it: a 50 ppm line, the clock term dropped (twice, CPU and rendered), the tone's phase reset per pixel, no lowpass, the SNR stated 3 dB wrong, the signal 1% fast, the fade rate multiplied by Speed, the old picture left in the wrong colour model on a mode change, a wrong parity bit, a manual start a group delay early, Line Sync off, a float clock, the picture uploaded a row low |
 | mutation | one character of the shipped compose shader (`1.0 - inner.y` to `1.0 + inner.y`) was caught by `--render` and `--raster` at both rasters, then reverted |
 | `tools/sweep.py` | all **20** swept controls measurably change the picture |
 | shaders | all 3 compile through `glslc`, not merely through Apple's driver |

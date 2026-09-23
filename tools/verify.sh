@@ -35,7 +35,7 @@
 #                   --render      the frame is the decoder's picture, byte for
 #                                 byte; a resize mid-run keeps it
 #                   --raster      the lean, fitted again in the rendered frame
-#                   --negative    the checks can FAIL: thirteen broken models,
+#                   --negative    the checks can FAIL: fourteen broken models,
 #                                 each caught by the bound that should catch it
 #   pipe          the fleet's --pipe frame format: a partial frame at EOF is
 #                 the end of the stream, a cue naming no control is refused,

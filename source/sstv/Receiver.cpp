@@ -92,11 +92,12 @@ void Receiver::SetParams( const Params& p )
 	//A picture in progress keeps its mode. Between pictures the chosen mode
 	//applies at once, so the sync detector is looking for the right pulse
 	//length and the picture buffer is the right size before line 0 arrives.
+	//The old picture is kept (converted if the colour model changed), as it
+	//is when the mode changes with a picture in progress: a mode change
+	//blanked the screen or did not depending on which side of a VIS header
+	//it landed.
 	if( !inPicture && params.mode >= 0 && params.mode != pictureMode )
-	{
 		configureMode( params.mode );
-		ClearPicture();
-	}
 }
 
 void Receiver::Reset()
@@ -128,15 +129,21 @@ void Receiver::ClearPicture()
 
 void Receiver::configureMode( int mode )
 {
-	const ModeSpec& m = Mode( mode );
+	const ModeSpec& m   = Mode( mode );
+	const bool wasRobot = width > 0 && Mode( pictureMode ).chromaAlternates && !debugKeepColourModel;
 	if( m.width != width || m.height != height )
 	{
 		//Resize, keeping what overlaps: the old picture stays on screen and
-		//is overwritten from the top, whatever size it was.
+		//is overwritten from the top, whatever size it was. Rows the old
+		//picture did not have are black in ITS colour model, and converted
+		//with the rest below.
+		const float fill[ 3 ] = { 0.0f,
+		                          wasRobot ? static_cast< float >( robot::kCOffset / 255.0 ) : 0.0f,
+		                          wasRobot ? static_cast< float >( robot::kCOffset / 255.0 ) : 0.0f };
 		std::vector< float > fresh[ 3 ];
 		for( int p = 0; p < 3; ++p )
 		{
-			fresh[ p ].assign( static_cast< size_t >( m.width ) * m.height, 0.0f );
+			fresh[ p ].assign( static_cast< size_t >( m.width ) * m.height, fill[ p ] );
 			const int rows = std::min( height, m.height );
 			const int cols = std::min( width, m.width );
 			for( int y = 0; y < rows; ++y )
@@ -146,6 +153,29 @@ void Receiver::configureMode( int mode )
 		}
 		width  = m.width;
 		height = m.height;
+	}
+
+	//The planes are R, G, B in Martin and Scottie and Y, R-Y, B-Y in Robot
+	//36. The old picture stays on screen under the new one, so when the
+	//colour model changes it is converted, or Composite() would read RGB as
+	//YCbCr and show a Martin picture green and magenta for the whole of the
+	//Robot picture painting over it (37 s of it at 1x).
+	const bool nowRobot = m.chromaAlternates && !debugKeepColourModel;
+	if( width > 0 && wasRobot != nowRobot )
+	{
+		const size_t n = static_cast< size_t >( width ) * height;
+		for( size_t i = 0; i < n; ++i )
+		{
+			const double a = planes[ 0 ][ i ] * 255.0, b = planes[ 1 ][ i ] * 255.0, c = planes[ 2 ][ i ] * 255.0;
+			double x, y, z;
+			if( nowRobot )
+				robot::Encode( std::clamp( a, 0.0, 255.0 ), std::clamp( b, 0.0, 255.0 ), std::clamp( c, 0.0, 255.0 ), x, y, z );
+			else
+				robot::Decode( a, b, c, x, y, z );
+			planes[ 0 ][ i ] = static_cast< float >( x / 255.0 );
+			planes[ 1 ][ i ] = static_cast< float >( y / 255.0 );
+			planes[ 2 ][ i ] = static_cast< float >( z / 255.0 );
+		}
 	}
 	pictureMode = mode;
 

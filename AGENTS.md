@@ -126,6 +126,16 @@ The first session's code built but had never been verified. Running it found:
    pulse. It now waits until the line's start has come out of the FIR. `--vis` checks
    a manual start's origin against the same 7.35-sample bound as a decoded one, in
    all three modes (0.0 samples; the draft's clamp is its negative control).
+9. **A switch to Robot 36 showed the old picture green and magenta** (also found
+   filming). The picture planes are R, G, B in Martin and Scottie and Y, R−Y, B−Y in
+   Robot, and `configureMode` kept them as they were, so the old picture was
+   composited in the wrong colour model until the new one had painted over all of it:
+   0.9 s at 40x, 37 s at 1x. And a switch between pictures (through `SetParams`)
+   blanked the screen instead, so what an operator saw depended on which side of a VIS
+   header the change landed. The planes are now converted when the colour model
+   changes, rows a larger mode adds are black, and the old picture stays either way.
+   `--progressive` compares the composite before and after the change on every row
+   not yet repainted, both directions, within one code (worst 1, 0 and 0).
 
 The chain itself, the integer timing, the phase-continuous oscillator, the VIS
 decoder, the Line Sync re-anchoring and the clock handling were sound, and are
@@ -276,6 +286,7 @@ differences are far inside every tolerance below.
 | `--threshold` slopes | dB per dB, far above and into the knee | 4√2 standard errors + 1/CNR at 10 dB, in dB over 5 dB (0.103) | as above |
 | `--progressive` count | rows replaced vs `floor( t s / T_line )` | **exact**, with frames within a derived guard (127 samples) of a line boundary excluded, and the count of asserted frames itself asserted | none |
 | `--progressive` Speed | 1x vs 120x planes | **bit-identical**: one binary, the same operations in the same order, only block sizes differ | none |
+| `--progressive` mode change | the composite of rows not yet repainted, before and after Martin → Robot and back | one 8-bit code: the flat field's decode error (0.275), the 601 inverse's three decimals (under 0.1) and the composite's rounding (0.5) | none |
 | `--vis` | decoded code; line 0's origin; a manual start's origin | exact code; origin within fs / FIR bandwidth = 7.35 samples (measured 1.0 decoded, 0.0 manual) | none |
 | `--sync` | edge spread under Line Sync at 300 ppm | two samples, one of sync detection and one of the station's pixel grid: 0.40–0.42 px (the spec asks one pixel; the derived bound is asserted); measured 0.24 | none |
 | `--clock` | running sample totals, fresh vs six-day | one sample: two ULPs of 5e5 s × s × fs is 5e-5 of a sample, so floors can differ by one only where the sum sits on an integer | none |
@@ -284,7 +295,7 @@ differences are far inside every tolerance below.
 | `--render` readback | quadrant primaries at the station | **exact** primaries, two picture pixels clear of each boundary (the box filter's footprint is at most one; the second is for the bilinear taps) | any width that is a multiple of 8 puts the taps on texel centres; both rasters are |
 | `--render` resize | rows not being written, before and after | **exact** bytes | the second size is 960×540 or 480×270 |
 | `--raster` | lean fitted in the rendered frame | per row: pw/rw picture px (the two output pixels either side of the crossing) + 1 (nearest sampling) + 1/pxS (the decoder's own edge), through 3/N: 0.018 at 1280×720, 0.030 at 320×180; measured within 5e-4. Also asserts the lean is resolved (larger than the tolerance) | **yes, and the tolerance is derived per raster**; the edge lands on picture pixel 120 at any width that is a multiple of 8 |
-| `--negative` | thirteen broken models fail | n/a | the two GL cases run at the raster asked |
+| `--negative` | fourteen broken models fail | n/a | the two GL cases run at the raster asked |
 | `sweep.py` | each control changes ≥ 1 subpixel | any change | run at 320×180 locally, 160×90 in CI |
 
 Two things are deliberately not relied on. Exact cancellation: no check asserts
@@ -312,8 +323,9 @@ must fail the named bound:
 | the tone's phase reset at every pixel | `--levels` "the discriminator's error bound" | 3 of 3 |
 | no lowpass | `--levels` the edge's closed-form τ | 2 of 3 |
 | the SNR stated in 1.5 kHz, not 3 (3 dB) | `--threshold` the linearised closed form | 5 of 8 |
-| the signal run 1% fast | `--progressive` rows replaced | 6 of 7 |
-| the fade rate multiplied by Speed | `--progressive` "Speed changes nothing per sample" | 1 of 7 |
+| the signal run 1% fast | `--progressive` rows replaced | 6 of 10 |
+| the fade rate multiplied by Speed | `--progressive` "Speed changes nothing per sample" | 1 of 10 |
+| the planes kept as they were when the colour model changes (the draft's) | `--progressive` "keeps the old picture" | 3 of 10 |
 | the parity bit sent wrong | `--vis` decoded | 6 of 10 |
 | the manual start clamped to the line's start (the draft's) | `--vis` "a manual start" | 3 of 10 |
 | Line Sync switched off | `--sync` "stays within" | 4 of 6 |
@@ -414,7 +426,8 @@ Release build, at 320×180 and 1280×720.
   5.7–7.1%); knee 3.70 dB against 3.11 (tolerance 2.78); 1.019 dB/dB far above,
   steepening to 1.265 on the 5 dB into the knee (1.351 under it, not asserted).
 - **Progressive.** 789 asserted frames at 1x, 40x and 120x, all exact; 1x and 120x
-  bit-identical through a noisy, fading, multipath channel.
+  bit-identical through a noisy, fading, multipath channel; a mode change Martin →
+  Robot 36 and back keeps the old picture's colours within one code.
 - **VIS.** 44, 60, 8 decoded, origins 1.0 sample off; a manual start (parity sent
   wrong) 0.0 samples off in all three modes; Auto VIS decodes three in turn.
 - **Sync.** 0.24 px spread at 300 ppm against Free-run's 75 px.
@@ -423,7 +436,7 @@ Release build, at 320×180 and 1280×720.
   transparent; the readback the right way up; Mix 0 is the clip; resize mid-run
   keeps unwritten rows; Robot 36 after a restart renders exactly.
 - **Raster.** 0.14637 against 0.14634 px/line at 1280×720; 0.14684 at 320×180.
-- **Negative controls.** All thirteen fail as they should.
+- **Negative controls.** All fourteen fail as they should.
 - **Mutation.** Caught by `--render` and `--raster`, reverted.
 - **No dead controls.** All 20 sweepable parameters, at 320×180 and 160×90.
 - **Every shader compiles** through glslc.
