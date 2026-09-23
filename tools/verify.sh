@@ -10,6 +10,13 @@
 #   shaders       does every shader compile, through a real GLSL compiler,
 #                 before a host has to find out. A shader that will not
 #                 compile presents to an operator as "the effect does nothing".
+#   demo          the browser demo's copies of those shaders are still the
+#                 plugin's, character for character. demo/plugin.js necessarily
+#                 holds a second copy of every shader, and two copies drift
+#                 quietly: the plugin keeps working, the page keeps working, and
+#                 they stop being the same effect. It says nothing about the
+#                 demo's PORT of the signal chain (demo/sstv.js); only a reader
+#                 can check that.
 #   build         a FRESH universal Release build. Not the dev build: CMake
 #                 latches the architecture list at the first target, so the
 #                 only build worth measuring is one configured from nothing.
@@ -69,6 +76,26 @@ if tools/check-shaders.sh; then
 	pass "every shader compiles"
 else
 	fail "a shader does not compile"
+fi
+
+#---------------------------------------------------------------------------
+# The browser demo's copy of the same GLSL.
+#
+# `demo/plugin.js` cannot include a C++ file, so it carries its own copy of
+# every shader. This compares the two character for character -- reformatting
+# counts, deliberately, because "it is only whitespace" is how a real change
+# gets waved through.
+#---------------------------------------------------------------------------
+step "demo: the browser copy of the shaders"
+if [ -f demo/tools/check_shaders.py ]; then
+	if python3 demo/tools/check_shaders.py >/tmp/slowscan-demo-shaders.log 2>&1; then
+		pass "$( tail -1 /tmp/slowscan-demo-shaders.log )"
+	else
+		fail "the demo's shaders have drifted -- see /tmp/slowscan-demo-shaders.log"
+		tail -12 /tmp/slowscan-demo-shaders.log
+	fi
+else
+	printf '   skipped: no demo/\n'
 fi
 
 step "build (fresh universal Release, $BUILD)"

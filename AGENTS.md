@@ -473,11 +473,72 @@ Release build, at 320×180 and 1280×720.
   constants were checked against the spec's own figures (see the table).
 - **The fading is flat** and the channel at most two paths.
 - **The decoder is one design.** MMSSTV and QSSTV differ in filter and sync detail.
-- **No OpenFX port and no browser demo.** Not required for 0.1.0.
+- **No OpenFX port.** Not required for 0.1.0. The browser demo's signal chain is a hand
+  port (see "The browser demo").
 - **`StoatworksAbout.h` and `ATTRIBUTIONS.md` are generated** by stoatworks-backend's
   `sync-about.py` and `sync-attributions.py` from the website's projects.json and the
   attribution master lists. Edit those, not these files; the next sync overwrites them.
 - **Nothing has been through a show.**
+
+## The browser demo
+
+`demo/` is the page at **slowscan-demo.stoatworks-labs.com** (Cloudflare Worker
+`slowscan-demo`, `wrangler.toml`, no build step). Written 2026-09-24. `demo/README.md`
+has the working detail; this is the why.
+
+**What runs for real.** The three shaders, `kVertex`, `kReadbackFragment` and
+`kComposeFragment`, copied unedited into `demo/plugin.js` and run in the same two passes
+as `ProcessOpenGL`: the kit's generated clip goes through the plugin's Readback shader
+onto 320×256 (320×240), is read back with `readPixels`, and the received picture comes
+back through the plugin's Compose shader with the cursor, the 4:3 rect and the mix.
+`demo/tools/check_shaders.py` compares them character for character and `verify.sh`
+runs it. None of the three contains a backtick, a backslash or `${`, so there is no
+escape to decode and the checker rejects any backslash on the JS side. Negative
+control (2026-09-24): `1.0 - inner.y` → `1.0 + inner.y` in plugin.js's COMPOSE fails
+it at line 32; restored.
+
+**What is ported.** All of `source/sstv/` (`demo/sstv.js`: Rng, Modes, Transmitter,
+Channel, Receiver, Engine), and `Controls.h`, `resolve()`, `frameSecondsFor()`,
+`pictureRect()` and the cursor row (`demo/plugin.js`). Function for function, same
+constants, same integer timing. xorshift128+ is done in 32-bit halves (SplitMix64
+seeding in BigInt), so the noise is the C++'s noise bit for bit; `int64_t` is a JS
+double, exact because nothing passes 1.3e12; `lround` is ported as half-away-from-zero;
+the planes are `Float32Array`; each slider is `Math.fround`ed before conversion, as the
+plugin stores it as a float. **Nothing checks the port but a reader.** When it was
+written it was driven side by side with a scratch driver linking `source/sstv/*.cpp`,
+900 frames each through four channels (defaults; Robot 36 at 3 dB with full fast
+fading, multipath, QRM, Line Sync and −200 ppm; Auto VIS + Live at 120x; Scottie S1
+switching to Robot 36), and the composites were **byte-identical** — so the browser's
+Math.* and this libm agreed at least that far. That comparison is not kept running.
+
+**What is omitted, and why.** `Audio` (FF_TYPE_BUFFER), `Audio QRM` and `Bin Spacing`:
+no host FFT in a browser, so a control there could only be dead. The interference path
+is still ported and fed 64 zero bins, and those two controls take the constructor's
+defaults. `Restart` (FF_TYPE_EVENT): the kit has no event control, so the transport's
+Restart (the page clock going backwards) calls `Engine.Restart()` as the event does.
+The host-clock unit vote (`elapsedSeconds`): the page's clock is seconds. The test
+hooks (`Debug*`) and the About block.
+
+**Decisions taken without asking.**
+- **Synchronous readback.** WebGL2 cannot map a pixel-pack buffer, so the page
+  `readPixels` straight into a typed array and hands the transmitter this frame, not
+  last frame's. Chrome logs "GPU stall due to ReadPixels" four times; that is this.
+- **No CPU cap beyond the plugin's.** The page clamps the frame to 1/240…1/24 s and runs
+  every sample it is worth (≤ 55,125), as the plugin does. A slow machine runs the
+  signal slower than Speed asks, and the stats line says so against the page's own clock
+  (not the clamped duration, which is exactly what would hide it). Measured: ~5 M
+  samples/s in Node on the M4 Max, 4.2 ms a frame at 120x; in headless Chrome on
+  SwiftShader the page managed 52–115x of 120x, the software GL taking the rest.
+- **The port is its own module** (`sstv.js`, no DOM), so it can be run in Node against
+  the C++ — which is how the byte-for-byte comparison above was done.
+- **A stats line under the canvas**: mode on the air, line being received, whether the
+  header decoded or the picture was started by hand, samples this frame, achieved speed,
+  CPU ms. A picture half-painted over the last reads as a broken page without it.
+- **Clips**: bars first (a slant, a fringe and a smear read at a glance), then grid,
+  scene, ramp, spot, detail. `showBackdrop` is on because Fit's letterbox is transparent.
+- **Presets are the page's own** (the plugin ships none), made only of its parameters:
+  clean path, below the FM threshold, deep fading, ghost, carrier on frequency, +300 ppm
+  free-run / with Line Sync / slant-corrected, Robot 36, Auto VIS, real time, Live at 120x.
 
 ---
 

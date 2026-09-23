@@ -26,6 +26,12 @@ Resolume. Martin M1 at 40x through a 15 dB channel with deep fading and a receiv
 clock 60 ppm fast. The card scrolls, so the picture arriving (above the cursor) is
 not the picture it is overwriting (below it).</sub>
 
+**[Try it in your browser](https://slowscan-demo.stoatworks-labs.com)** — the
+plugin's own readback and compose shaders in WebGL2, around a JavaScript port of
+its whole signal chain: the station, the HF channel and the decoder. It is a port
+and not the plugin, and it has no audio input: read what
+[the page itself says it does not reproduce](https://slowscan-demo.stoatworks-labs.com).
+
 ## The one idea
 
 Slow-scan television sends a still picture down a voice radio channel as audio. Each
@@ -149,7 +155,9 @@ CGL context, plus an `oxbow` load. Still untested:
 - what the host's real clock does over a long session.
 
 The Windows build is CI-only and has never run. Nothing has been through a show.
-There is no OpenFX port and no browser demo; neither was in scope for 0.1.0.
+There is no OpenFX port; it was not in scope for 0.1.0. The browser demo, linked at
+the top, runs the plugin's shaders over a hand port of its signal chain, and
+nothing checks a port but a reader.
 
 The [user guide](docs/USER-GUIDE.md) covers every control, what it does and why.
 

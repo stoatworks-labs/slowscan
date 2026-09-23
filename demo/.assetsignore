@@ -1,0 +1,6 @@
+# Not part of the page. README.md documents the demo for whoever edits it next,
+# and check_shaders.py is a repo-side check that the demo's shader copies still
+# match the plugin's; wrangler would otherwise upload both and serve them, which
+# is neither useful nor anybody's business.
+README.md
+tools/
