@@ -675,6 +675,7 @@ int runLevels( bool resetPhase, bool bypassLowpass )
 		runOnePicture( e );
 
 		int wrong = 0, probed = 0;
+		double worstCodes = 0.0;
 		const int third = m.height / 3;
 		for( int band = 0; band < 3; ++band )
 		{
@@ -687,12 +688,13 @@ int runLevels( bool resetPhase, bool bypassLowpass )
 					for( int p = 0; p < 3; ++p )
 					{
 						++probed;
-						const int got = static_cast< int >( std::lround( e.Rx().Plane( p )[ static_cast< size_t >( row ) * m.width + px ] * 255.0 ) );
-						if( got != expected )
+						const double v = e.Rx().Plane( p )[ static_cast< size_t >( row ) * m.width + px ] * 255.0;
+						worstCodes     = std::max( worstCodes, std::fabs( v - expected ) );
+						if( static_cast< int >( std::lround( v ) ) != expected )
 							++wrong;
 					}
 		}
-		Check( wrong == 0, "flat black, grey and white return their 8-bit values exactly over " + std::to_string( probed ) + " samples, pixels " + std::to_string( settled ) + ".." + std::to_string( m.width - settled - 1 ) + " (wrong: " + std::to_string( wrong ) + "); a filtered pure tone is a pure tone" );
+		Check( wrong == 0, "flat black, grey and white return their 8-bit values exactly over " + std::to_string( probed ) + " samples, pixels " + std::to_string( settled ) + ".." + std::to_string( m.width - settled - 1 ) + " (wrong: " + std::to_string( wrong ) + ", worst " + F( worstCodes, 4 ) + " of the half code rounding allows); a filtered pure tone is a pure tone" );
 	}
 
 	//------------------------------------------------------------------
