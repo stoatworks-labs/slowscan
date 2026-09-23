@@ -127,12 +127,12 @@ universal Release build, running every check at **two rasters**, 320×180 and
 | the bundle | universal (`x86_64 arm64`), exports `plugMain`, ad-hoc signs; `oxbow` reports `SW Slowscan` / `SS01` / `effect` and renders 120 frames through `plugMain` |
 
 Render cost at the defaults (40x), best of three runs of 60 frames after a warm-up,
-`glFinish` both sides, on a GPU and CPU shared with other work: **1.01 ms** at 720p,
-**1.01 ms** at 1080p, **1.04 ms** at 4K. The cost is nearly all the CPU signal
-chain, which does not care about the output size. It scales with Speed: **0.33 ms**
-a frame at 1x and **2.54 ms** at 120x (1080p). The chain alone runs 11 million samples
+`glFinish` both sides, on a GPU and CPU shared with other work: **1.04 ms** at 720p,
+**1.02 ms** at 1080p, **1.04 ms** at 4K. The cost is nearly all the CPU signal
+chain, which does not care about the output size. It scales with Speed: **0.29 ms**
+a frame at 1x and **2.58 ms** at 120x (1080p). The chain alone runs 11 million samples
 a second at the defaults, 6 million with everything on (multipath, QRM, audio). At
-120x that is 2.0 ms and 3.6 ms of CPU a frame, on the host's render thread.
+120x that is 2.0 ms and 3.7 ms of CPU a frame, on the host's render thread.
 macOS figures only.
 
 ### Not established
@@ -144,7 +144,7 @@ CGL context, plus an `oxbow` load. Still untested:
 - how 21 parameters in four groups, one of them the audio input, present in
   Arena's inspector;
 - whether Resolume's FFT bins are laid out as either `Bin Spacing` assumes;
-- whether 3.6 ms of CPU a frame at 120x is comfortable on a busy show machine;
+- whether 3.7 ms of CPU a frame at 120x is comfortable on a busy show machine;
 - what the host's real clock does over a long session.
 
 The Windows build is CI-only and has never run. Nothing has been through a show.

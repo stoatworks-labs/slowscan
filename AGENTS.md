@@ -110,8 +110,8 @@ The first session's code built but had never been verified. Running it found:
    output pixel whose footprint holds the cursor row's centre.
 5. **Nothing tested the readback.** Every chain check sets its source directly. A
    one-character mutation that flipped the readback upside down (`MaxUV.y - uv.y` →
-   `MaxUV.y + uv.y`) passed every check the draft had, `--raster` included (a
-   vertical edge is the same flipped). `--render` now checks a quadrant card arrives
+   `MaxUV.y + uv.y`) passed every other check in the harness, the new `--raster`
+   included (a vertical edge is the same flipped). `--render` now checks a quadrant card arrives
    at the station the right way up; that mutation fails it.
 6. **No `--size`, no second raster, `--list` the sweep could not read, no sweep, no
    verify, no CI, no docs.**
@@ -317,7 +317,7 @@ re-run green. That proves the harness drives the shaders the plugin ships, not a
 copy.
 
 A second mutation, `MaxUV.y - uv.y` → `MaxUV.y + uv.y` in `Readback.cpp`, passed
-every check the draft had. It is how the missing readback check was found (defect
+every other check in the harness. It is how the missing readback check was found (defect
 5), and the new check fails it: 39,816 of 79,632 pixels wrong.
 
 ---
@@ -416,16 +416,18 @@ Release build, at 320×180 and 1280×720.
 
   | | speed | ms/frame | % of a 60fps frame |
   | --- | --- | --- | --- |
-  | 1280×720 | 40x | 1.01 | 6.1% |
-  | 1920×1080 | 40x | 1.01 | 6.1% |
+  | 1280×720 | 40x | 1.04 | 6.2% |
+  | 1920×1080 | 40x | 1.02 | 6.1% |
   | 3840×2160 | 40x | 1.04 | 6.2% |
-  | 1920×1080 | 1x | 0.33 | 2.0% |
-  | 1920×1080 | 120x | 2.54 | 15.2% |
+  | 1920×1080 | 1x | 0.29 | 1.7% |
+  | 1920×1080 | 120x | 2.58 | 15.5% |
 
   The output size hardly matters; the CPU chain is the cost, and it scales with
   Speed. `--engine` alone: 11 Msamples/s at the defaults (0.017 ms a frame at 1x,
-  2.0 ms at 120x), 6 Msamples/s with multipath, QRM and audio on (3.6 ms at 120x).
-  That is on the host's render thread.
+  2.0 ms at 120x), 6 Msamples/s with multipath, QRM and audio on (3.7 ms at 120x).
+  That is on the host's render thread. The table is the final `verify.sh` run; an
+  earlier run minutes before read 1.01 / 1.01 / 1.04 / 0.33 / 2.54 on the same
+  shared machine.
 
 ### Assumed, or not done
 
@@ -433,7 +435,7 @@ Release build, at 320×180 and 1280×720.
   the audio input's routing, the host's clock and its FFT bins are all untested.
 - **Resolume's 64 bins are unmeasured**, as fleet-wide. `Bin Spacing` is the hedge.
 - **The Windows build is CI-only**, and CI cannot run yet.
-- **3.6 ms of CPU a frame at 120x with everything on** may be too much on a loaded
+- **3.7 ms of CPU a frame at 120x with everything on** may be too much on a loaded
   show machine. The engine is single-threaded on the render thread.
 - **Barber's document was not re-read** by the session that finished this; the
   constants were checked against the spec's own figures (see the table).
@@ -450,7 +452,7 @@ Release build, at 320×180 and 1280×720.
 
 ## Open questions
 
-- **Should the engine run on its own thread?** At 120x with everything on it is 3.6
+- **Should the engine run on its own thread?** At 120x with everything on it is 3.7
   ms of the host's render thread. A worker a frame behind would cost nothing visible
   (a line is a third of a second even at 120x) but adds a lock and a lifetime.
 - **Should Speed cap the fade rate's on-screen speed?** At 120x a 1 Hz Doppler spread
