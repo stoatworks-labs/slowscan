@@ -35,7 +35,7 @@ made of it.
 | a picture buffer written line by line as the lines complete | **progressive arrival**, the new picture over the old from the top |
 | Gaussian noise into a phase-difference discriminator | pixel noise ∝ 1/SNR above the **FM threshold**, and **clicks** (whole-cycle slips) below it |
 | the discriminator's one-pole lowpass | **horizontal smear**, an edge's tail with the one-pole's τ |
-| a Clarke sum of sinusoids on the path | **fading** that dims and noises bands of lines |
+| a Clarke sum of sinusoids on the path | **fading** that takes the SNR down with it: FM does not dim, so a fade is a band of noisy lines |
 | a delayed second path | **ghosts** and comb notches |
 | a carrier in the passband | a beat that drags the discriminator into **vertical stripes** |
 | the host's FFT as a noise spectrum | **audio as interference**, landing where its spectrum overlaps 1500–2300 Hz |
@@ -476,8 +476,10 @@ Release build, at 320×180 and 1280×720.
 - **No OpenFX port and no browser demo.** Not required for 0.1.0.
 - **`StoatworksAbout.h` and `ATTRIBUTIONS.md` are provisional hand copies** with
   `guide=""`, in the shape the fleet's syncs generate. Register the project and re-run
-  the syncs before the first release. The About facts were chosen so the button count,
-  and so the parameter count, does not change when regenerated.
+  the syncs before the first release. `docs/USER-GUIDE.md` now exists, so the sync
+  will set `guide` and the About block gains a fourth button: the parameter count goes
+  from 25 to 26 when the header is regenerated. The guide's About section names only
+  the three buttons there are today; add the guide button to it with the sync.
 - **Nothing has been through a show.**
 
 ---

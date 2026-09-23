@@ -84,8 +84,11 @@ timing, or any check's tolerance.
 ## Not done yet
 - **Never loaded into Resolume.** Everything numeric is measured offline on macOS,
   plus an `oxbow` load. The Windows build is CI-only and has never run.
-- No user guide, no OpenFX port, no browser demo, no factory presets.
+- No OpenFX port, no browser demo, no factory presets. The user guide is
+  `docs/USER-GUIDE.md`; every claim in it is read from the code, so change both together.
 - `StoatworksAbout.h` and `ATTRIBUTIONS.md` are provisional hand copies with `guide=""`.
+  The guide now exists, so the sync will set `guide` and add a fourth About button:
+  the parameter count goes from 25 to 26 when the header is regenerated.
 
 ## Diagnostics
 

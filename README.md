@@ -58,8 +58,9 @@ None of these is drawn. Each is the chain doing what it does:
   turns to streaks.
 - **Horizontal smear.** `Rx Bandwidth` is the discriminator's lowpass. Narrow it and
   edges smear to the right over its time constant.
-- **Fading.** A seeded Clarke model with a Doppler spread of `Fade Rate`. It dims
-  whole bands of lines and takes the SNR with it.
+- **Fading.** A seeded Clarke model with a Doppler spread of `Fade Rate`. FM does
+  not dim in a fade: a fade takes the SNR with it, so it shows as a band of noisy
+  lines.
 - **Ghosts and combing.** A second path at `Multipath` ms interferes with the first.
 - **Vertical stripes.** A carrier on frequency (`QRM Freq`, `QRM Level`) beats with
   the picture tones and drags the discriminator with it.
@@ -148,8 +149,9 @@ CGL context, plus an `oxbow` load. Still untested:
 - what the host's real clock does over a long session.
 
 The Windows build is CI-only and has never run. Nothing has been through a show.
-There is no OpenFX port, no browser demo and no user guide; none was in scope for
-0.1.0.
+There is no OpenFX port and no browser demo; neither was in scope for 0.1.0.
+
+The [user guide](docs/USER-GUIDE.md) covers every control, what it does and why.
 
 ## Build
 
