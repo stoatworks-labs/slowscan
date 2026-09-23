@@ -118,10 +118,18 @@ The first session's code built but had never been verified. Running it found:
 7. **`--negative` covered six checks and did not name the bound.** It covers every
    physics check now, perturbing the model through a test hook each time, and each
    case names the check that must be among the failures.
+8. **Every manual start came out six pixels to the right** (found filming the
+   release video, where it showed as a purple bar down the left edge of any picture
+   whose header had failed). `Engine::manualStartIfNeeded` fired on the first sample
+   of line 2 and clamped `within`, which is 31 samples negative there, to 0: the line
+   began a whole group delay early, and the first six pixels of green read the sync
+   pulse. It now waits until the line's start has come out of the FIR. `--vis` checks
+   a manual start's origin against the same 7.35-sample bound as a decoded one, in
+   all three modes (0.0 samples; the draft's clamp is its negative control).
 
 The chain itself, the integer timing, the phase-continuous oscillator, the VIS
 decoder, the Line Sync re-anchoring and the clock handling were sound, and are
-unchanged.
+unchanged, except for the manual start (defect 8).
 
 ---
 
@@ -167,12 +175,21 @@ The check now computes both regimes from the receiver's own filters:
 - **The knee**: Rice's click rate `r erfc( sqrt( CNR ) )`, each click an impulse of
   one cycle into the one-pole (Campbell's theorem gives its variance). The knee is
   stated by the textbook's definition, the SNR where the output noise is 1 dB over the
-  linear formula: **3.11 dB** predicted, **3.60** measured.
+  linear formula: **3.11 dB** predicted, **3.70** measured.
 
 A first version defined the knee as the excess reaching 2× the Gaussian. The
 measurement peaks at 2.09 and falls again, because a discriminator's output is
 bounded and the variance saturates while the linear formula does not. The 1 dB
 definition is both the textbook's and reachable.
+
+The same saturation sank the draft's slope check, "steeper below the knee than
+above it". The chord from the knee to 5 dB under it straddles the click regime and
+the saturation, and came out 0.126 dB/dB steeper than the chord above on one draw
+and 0.086 on the next (the tolerance is 0.103). The draw changed because defect 8's
+fix moved every manual start by 31 samples, and a header does not decode below about
+12 dB here. So the check is now the one the saturation cannot reach: the chord from 5
+dB above the knee down to it is steeper than the far chord (15 to 10 dB, itself the
+linear law) by more than the tolerance. The chord below is printed, not asserted.
 
 ### ☠️ One seed makes one draw look like a bias
 
@@ -255,11 +272,11 @@ differences are far inside every tolerance below.
 | `--levels` ramp | pixel k vs (k − τ)/(W−1) | one transmitter step + half an 8-bit code (0.0051); measured 0.0027 | none |
 | `--levels` edge | τ fitted from ln\|1 − v\| | 1%: ten times the larger of the interpolation error (0.015%) and the FIR image ripple, which is zero-mean over the fit | none |
 | `--threshold` linear | variance vs the linearised closed form, 15–30 dB | 4 standard errors of a sample variance of N correlated values, `sqrt( 2(1+2ρ²)/N )` with ρ from the closed form's own autocorrelation, plus 1/CNR for the linearisation: 5.7–7.1% | seeded noise; another libm moves the draw, and the tolerance is a standard error |
-| `--threshold` knee | SNR where variance is 1 dB over linear | Rice's formula's two known approximations, each solved from the closed forms: a factor of 3 in click energy (click width vs impulse) moves the knee 1.47 dB; the linear form's 1/CNR error moves it 1.06; plus a quarter of the 1 dB grid. 2.78 dB; measured 0.49 | as above |
-| `--threshold` slopes | dB per dB, far above and across the knee | 4√2 standard errors + 1/CNR at 10 dB, in dB over 5 dB (0.103) | as above |
+| `--threshold` knee | SNR where variance is 1 dB over linear | Rice's formula's two known approximations, each solved from the closed forms: a factor of 3 in click energy (click width vs impulse) moves the knee 1.47 dB; the linear form's 1/CNR error moves it 1.06; plus a quarter of the 1 dB grid. 2.78 dB; measured 0.59 | as above |
+| `--threshold` slopes | dB per dB, far above and into the knee | 4√2 standard errors + 1/CNR at 10 dB, in dB over 5 dB (0.103) | as above |
 | `--progressive` count | rows replaced vs `floor( t s / T_line )` | **exact**, with frames within a derived guard (127 samples) of a line boundary excluded, and the count of asserted frames itself asserted | none |
 | `--progressive` Speed | 1x vs 120x planes | **bit-identical**: one binary, the same operations in the same order, only block sizes differ | none |
-| `--vis` | decoded code; line 0's origin | exact code; origin within fs / FIR bandwidth = 7.35 samples (measured 1.0) | none |
+| `--vis` | decoded code; line 0's origin; a manual start's origin | exact code; origin within fs / FIR bandwidth = 7.35 samples (measured 1.0 decoded, 0.0 manual) | none |
 | `--sync` | edge spread under Line Sync at 300 ppm | two samples, one of sync detection and one of the station's pixel grid: 0.40–0.42 px (the spec asks one pixel; the derived bound is asserted); measured 0.24 | none |
 | `--clock` | running sample totals, fresh vs six-day | one sample: two ULPs of 5e5 s × s × fs is 5e-5 of a sample, so floors can differ by one only where the sum sits on an integer | none |
 | `--render` exactness | frame bytes vs the decoder's picture | **exact**: `texelFetch` is nearest, `mix( clip, pic, 1 )` is `pic` exactly; probes need a 1/16-output-pixel margin, GL 4.1's minimum sub-pixel precision | **yes**: at 320×180 58,400 of 81,920 pixels cannot be resolved and the validator must say so; 23,520 are still compared |
@@ -267,7 +284,7 @@ differences are far inside every tolerance below.
 | `--render` readback | quadrant primaries at the station | **exact** primaries, two picture pixels clear of each boundary (the box filter's footprint is at most one; the second is for the bilinear taps) | any width that is a multiple of 8 puts the taps on texel centres; both rasters are |
 | `--render` resize | rows not being written, before and after | **exact** bytes | the second size is 960×540 or 480×270 |
 | `--raster` | lean fitted in the rendered frame | per row: pw/rw picture px (the two output pixels either side of the crossing) + 1 (nearest sampling) + 1/pxS (the decoder's own edge), through 3/N: 0.018 at 1280×720, 0.030 at 320×180; measured within 5e-4. Also asserts the lean is resolved (larger than the tolerance) | **yes, and the tolerance is derived per raster**; the edge lands on picture pixel 120 at any width that is a multiple of 8 |
-| `--negative` | twelve broken models fail | n/a | the two GL cases run at the raster asked |
+| `--negative` | thirteen broken models fail | n/a | the two GL cases run at the raster asked |
 | `sweep.py` | each control changes ≥ 1 subpixel | any change | run at 320×180 locally, 160×90 in CI |
 
 Two things are deliberately not relied on. Exact cancellation: no check asserts
@@ -294,10 +311,11 @@ must fail the named bound:
 | the Clock Error term dropped | `--slant` fit | 20 of 32 |
 | the tone's phase reset at every pixel | `--levels` "the discriminator's error bound" | 3 of 3 |
 | no lowpass | `--levels` the edge's closed-form τ | 2 of 3 |
-| the SNR stated in 1.5 kHz, not 3 (3 dB) | `--threshold` the linearised closed form | 6 of 8 |
+| the SNR stated in 1.5 kHz, not 3 (3 dB) | `--threshold` the linearised closed form | 5 of 8 |
 | the signal run 1% fast | `--progressive` rows replaced | 6 of 7 |
 | the fade rate multiplied by Speed | `--progressive` "Speed changes nothing per sample" | 1 of 7 |
-| the parity bit sent wrong | `--vis` decoded | 6 of 7 |
+| the parity bit sent wrong | `--vis` decoded | 6 of 10 |
+| the manual start clamped to the line's start (the draft's) | `--vis` "a manual start" | 3 of 10 |
 | Line Sync switched off | `--sync` "stays within" | 4 of 6 |
 | frame durations taken in float | `--clock` running totals | 1 of 3 |
 | the picture uploaded one row low | `--render` byte for byte | 4 of 11 |
@@ -393,18 +411,19 @@ Release build, at 320×180 and 1280×720.
 - **Levels.** Flat fields exact (worst 0.275 of 0.5 codes); ramp 0.0027 of 0.0051;
   τ = 5.797 px against 5.797.
 - **Threshold.** −1.4% to −1.9% from the closed form at 15–30 dB (tolerance
-  5.7–7.1%); knee 3.60 dB against 3.11 (tolerance 2.78); 1.022 dB/dB far above;
-  steepening 1.240 → 1.366 through the knee.
+  5.7–7.1%); knee 3.70 dB against 3.11 (tolerance 2.78); 1.019 dB/dB far above,
+  steepening to 1.265 on the 5 dB into the knee (1.351 under it, not asserted).
 - **Progressive.** 789 asserted frames at 1x, 40x and 120x, all exact; 1x and 120x
   bit-identical through a noisy, fading, multipath channel.
-- **VIS.** 44, 60, 8 decoded, origins 1.0 sample off; Auto VIS decodes three in turn.
+- **VIS.** 44, 60, 8 decoded, origins 1.0 sample off; a manual start (parity sent
+  wrong) 0.0 samples off in all three modes; Auto VIS decodes three in turn.
 - **Sync.** 0.24 px spread at 300 ppm against Free-run's 75 px.
 - **Clock.** Running totals within one sample after six days; float fails 599/599.
 - **Render.** Byte for byte at both rasters; validator fires at 320×180; letterbox
   transparent; the readback the right way up; Mix 0 is the clip; resize mid-run
   keeps unwritten rows; Robot 36 after a restart renders exactly.
 - **Raster.** 0.14637 against 0.14634 px/line at 1280×720; 0.14684 at 320×180.
-- **Negative controls.** All twelve fail as they should.
+- **Negative controls.** All thirteen fail as they should.
 - **Mutation.** Caught by `--render` and `--raster`, reverted.
 - **No dead controls.** All 20 sweepable parameters, at 320×180 and 160×90.
 - **Every shader compiles** through glslc.

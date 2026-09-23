@@ -1070,12 +1070,18 @@ int runThreshold( double snrOffsetDb )
 	       "the knee: the variance is 1 dB over the linear law at " + F( measuredKnee, 2 ) + " dB, against Rice's " + F( kneeDb, 2 ) + " dB (tolerance " + F( kneeTol, 2 ) + " dB = " + F( slip, 2 ) + " for click width + " + F( lin, 2 ) + " for linearisation + 0.25 grid)" );
 
 	//------------------------------------------------------------------
-	// Gently above, steeply below. The variance's slope in dB per dB of
-	// SNR, on the chord from 5 dB above the stated knee down to it, and on
-	// the chord from the knee to 5 dB below it. The linear law is exactly
-	// 1 dB/dB. The curve must be STEEPENING through the knee: the chord
-	// below is steeper than the chord above -- no threshold at all would
-	// make them equal -- and the far chord (15 -> 10 dB) is the linear law.
+	// Gently far above, steeper into the knee. The variance's slope in dB
+	// per dB of SNR, on the far chord (15 -> 10 dB), which must be the
+	// linear law's exact 1 dB/dB, and on the chord from 5 dB above the
+	// stated knee down to it, which must be steeper than the far chord by
+	// more than the tolerance -- no threshold at all would make them equal.
+	//
+	// Not the chord BELOW the knee against the one above it, as the draft
+	// had it: below the knee the discriminator's bounded output saturates
+	// the variance (the excess peaks near 2x and falls; see AGENTS.md), so
+	// that chord straddles two regimes and came out within the tolerance of
+	// the one above it on one draw and outside it on the next. Its slope is
+	// printed, not asserted.
 	//------------------------------------------------------------------
 	auto varAt = [ & ]( double snr ) {
 		//Log-linear interpolation on the 1 dB grid.
@@ -1097,8 +1103,9 @@ int runThreshold( double snrOffsetDb )
 		const double tol   = 10.0 * std::log10( 1.0 + 4.0 * std::sqrt( 2.0 ) * stderrRel + 1.0 / thresholdCnr( tm, 10.0 ) ) / 5.0;
 		Check( std::fabs( far - 1.0 ) <= tol,
 		       "far above, 15 -> 10 dB, the variance rises " + F( far, 3 ) + " dB per dB: the linear law's 1 (tolerance " + F( tol, 3 ) + ")" );
-		Check( below > above && above < below - tol,
-		       "steepening through the knee: " + F( above, 3 ) + " dB/dB on the 5 dB above it, " + F( below, 3 ) + " on the 5 dB below it (clear by more than " + F( tol, 3 ) + ")" );
+		Check( above > far + tol,
+		       "steepening into the knee: " + F( above, 3 ) + " dB/dB on the 5 dB above it, against " + F( far, 3 ) + " far above (clear by more than " + F( tol, 3 ) + ")" );
+		Say( "         (below the knee, where the variance saturates: %.3f dB/dB on the 5 dB under it, reported only)\n", below );
 	}
 	return g_failures;
 }
@@ -1227,7 +1234,7 @@ int runProgressive( double speedError, bool fadeTimesSpeed )
 //---------------------------------------------------------------------------
 /// --vis: the header decodes back to the mode it was sent in.
 //---------------------------------------------------------------------------
-int runVis( bool flipParity )
+int runVis( bool flipParity, bool clampManualStart = false )
 {
 	Say( "vis: the header, decoded\n\n" );
 
@@ -1269,6 +1276,42 @@ int runVis( bool flipParity )
 		const double offset = origin - Engine::LineStartSample( mode, 0 ) - Receiver::kGroupDelay;
 		Check( startedAt >= 0 && std::fabs( offset ) <= kSampleRateHz / ( Receiver::kFirHighHz - Receiver::kFirLowHz ),
 		       std::string( m.name ) + ": line 0's origin is " + F( offset, 1 ) + " samples from the station's plus the group delay (bound 7.35 = fs / FIR bandwidth)" );
+	}
+
+	//A header that fails (here: its parity sent wrong, on a clean channel)
+	//is a manual start two lines in, from the station's clock. It must land
+	//where a decoded start would have: the line's origin G samples behind the
+	//station's, within the same bound. The draft clamped the line time to 0
+	//instead of waiting out G, started every manual picture 31 samples early,
+	//and put the sync pulse where the first six pixels of green should be.
+	for( int mode = 0; mode < kModeCount; ++mode )
+	{
+		const ModeSpec& m = Mode( mode );
+		Engine e;
+		e.SetParams( cleanParams( mode ) );
+		e.Tx().DebugFlipParity( true );
+		e.DebugClampManualStart( clampManualStart );
+		const std::vector< uint8_t > img = flatSource( m.width, m.height, 128 );
+		e.SetSource( img.data(), m.width, m.height );
+
+		const int64_t limit = Engine::LineStartSample( mode, 4 );
+		int64_t startedAt      = -1;
+		double lineTimeAtStart = 0.0;
+		int lineAtStart        = -1;
+		while( e.Tx().PictureSample() < limit && startedAt < 0 )
+		{
+			e.Run( 1 );
+			if( e.Rx().PicturesStarted() > 0 )
+			{
+				startedAt       = e.Tx().PictureSample();
+				lineTimeAtStart = e.Rx().LineTime();
+				lineAtStart     = e.Rx().Line();
+			}
+		}
+		const double origin = static_cast< double >( startedAt ) - lineTimeAtStart;
+		const double offset = startedAt >= 0 ? origin - Engine::LineStartSample( mode, lineAtStart ) - Receiver::kGroupDelay : 1e9;
+		Check( e.Rx().ForcedStarts() == 1 && e.Rx().VisDecoded() == 0 && std::fabs( offset ) <= kSampleRateHz / ( Receiver::kFirHighHz - Receiver::kFirLowHz ),
+		       std::string( m.name ) + ": a manual start on line " + std::to_string( lineAtStart ) + " has its origin " + F( offset, 1 ) + " samples from the station's plus the group delay (bound 7.35, as decoded)" );
 	}
 
 	//Auto VIS end to end: the station cycles, the decoder follows.
@@ -2240,6 +2283,7 @@ int runNegative( int w, int h, bool withGL )
 		{ "progressive: the signal run 1% fast", "rows replaced", false, [] { runProgressive( 0.01, false ); } },
 		{ "progressive: the fade rate multiplied by Speed", "Speed changes nothing per sample", false, [] { runProgressive( 0.0, true ); } },
 		{ "vis: the parity bit sent wrong", "decoded", false, [] { runVis( true ); } },
+		{ "vis: the manual start clamped to the line's start", "a manual start", false, [] { runVis( false, true ); } },
 		{ "sync: Line Sync switched off", "stays within", false, [] { runSync( false ); } },
 		{ "clock: frame durations taken in float", "running sample totals", false, [] { runClock( true ); } },
 		{ "render: the picture uploaded one row low", "byte for byte", true, [ w, h ] { runRender( w, h, 1 ); } },

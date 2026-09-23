@@ -86,7 +86,13 @@ void Engine::manualStartIfNeeded()
 	const int mode          = tx.CurrentMode();
 	const int64_t lineStart = LineStartSample( mode, tx.Line() );
 	const double within     = static_cast< double >( tx.PictureSample() - lineStart ) - Receiver::kGroupDelay;
-	const double rxStep     = 1.0 + params.clockErrorPpm * 1e-6;
+	//The line's start has left the station but not yet come out of the
+	//receiver's FIR. Wait for it. Clamping `within` to 0 here instead (as the
+	//draft did) started the line a whole group delay early, and every manual
+	//start came out six pixels to the right, the sync where green should be.
+	if( within < 0.0 && !debugClampManualStart )
+		return;
+	const double rxStep = 1.0 + params.clockErrorPpm * 1e-6;
 	rx.ForceStart( mode, tx.Line(), std::max( 0.0, within ) * rxStep );
 }
 

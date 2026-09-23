@@ -81,8 +81,8 @@ inline double QrmLevel( float v )
 	return clamp01( v );
 }
 
-/// The host's spectrum, as tones: 1 puts a full-scale bin at the signal's
-/// own amplitude.
+/// The host's spectrum, as noise it shapes: at 1 a flat full-scale spectrum
+/// is interference as loud as the picture.
 inline double AudioLevel( float v )
 {
 	return clamp01( v );

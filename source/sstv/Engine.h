@@ -72,11 +72,16 @@ public:
 	/// fade rate multiplied by it, which is what "make the fades look the
 	/// same at any Speed" would do. `--progressive`'s invariance must fail.
 	void DebugFadeTimesSpeed( bool on ) { debugFadeTimesSpeed = on; SetParams( params ); }
+	/// Negative control: the draft's manual start, which clamped the line
+	/// time to 0 instead of waiting out the FIR's group delay. `--vis` must
+	/// see the picture land a group delay early.
+	void DebugClampManualStart( bool on ) { debugClampManualStart = on; }
 
 private:
 	void manualStartIfNeeded();
 	double debugSpeedError   = 0.0;
 	bool debugFadeTimesSpeed = false;
+	bool debugClampManualStart = false;
 
 	EngineParams params;
 	Transmitter tx;
