@@ -19,6 +19,15 @@ timing, or any check's tolerance.
 - Press an event: `--press "Restart@30"`. Feed a synthetic spectrum: `--audio 1`.
   Scroll the card so Live differs from Latch: `--motion`
 - List parameters, kinds, defaults and ranges: `./build/sstest --list`
+- Footage through the real plugin — **`--pipe`**, raw RGBA frames in, raw RGBA frames
+  out, with `--size WxH`, `--fps N` and an optional `--script` of timed cues:
+  `ffmpeg … -f rawvideo -pix_fmt rgba - | ./build/sstest --pipe --size 1920x1080 --fps 30 [--script cues.txt] | ffmpeg …`
+  A cue line is `frame  Parameter Name  value` (`#` starts a comment), in the same
+  units as `--set`; `@audio` is the synthetic spectrum's level. Values interpolate
+  linearly between a name's cues and hold before the first and after the last, so a
+  step needs two cues a frame apart. Frame *n* is clocked at `n / --fps` (default 60).
+  An unknown name exits 2 before any frame; a partial frame at EOF ends the stream
+  with exit 0; a closed stdout exits 1.
 
 ## Verify
 - Everything: `tools/verify.sh` (the shaders through glslc, a fresh universal build,
@@ -37,6 +46,8 @@ timing, or any check's tolerance.
 - The lean, fitted in the rendered frame: `./build/sstest --raster --size 320x180`
 - The checks can fail: `./build/sstest --negative`
 - Everything with no GL (what CI runs): `./build/sstest --offline`
+- `--pipe` keeps the fleet frame format: `tools/verify.sh` feeds it 2.5 frames and wants
+  exactly 2 back, a cue naming no control and wants exit 2, and a closed stdout and wants exit 1
 - No dead controls: `python3 tools/sweep.py --binary build/sstest` (`--size WxH`, `--jobs N`)
 - Render cost: `./build/sstest --bench`. The CPU chain alone: `./build/sstest --engine`
 - What a host sees: `~/Projects/resolume/oxbow/build/oxbow probe build-universal/Slowscan.bundle`

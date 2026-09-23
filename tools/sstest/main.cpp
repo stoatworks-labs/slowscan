@@ -49,7 +49,13 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include <map>
+#include <sstream>
+#include <fstream>
 #include <vector>
+
+#include <csignal>
+#include <unistd.h>
 
 using namespace slowscan;
 using namespace slowscan::sstv;
@@ -2370,6 +2376,85 @@ void listParameters()
 }
 
 //---------------------------------------------------------------------------
+// --pipe cue sheet: one 'frame Name Value' per line, the fleet's format, so
+// one filming script drives any of the harnesses. Values interpolate linearly
+// between a name's cues and hold before the first and after the last.
+// '@audio' is the synthetic spectrum's level, not a parameter.
+//---------------------------------------------------------------------------
+using Track = std::vector< std::pair< int, float > >;
+
+std::map< std::string, Track > loadScript( const std::string& path, std::string& error )
+{
+	std::map< std::string, Track > tracks;
+	std::ifstream file( path );
+	if( !file )
+	{
+		error = "cannot open " + path;
+		return tracks;
+	}
+
+	std::string line;
+	int lineNumber = 0;
+	while( std::getline( file, line ) )
+	{
+		++lineNumber;
+		const size_t hash = line.find( '#' );
+		if( hash != std::string::npos )
+			line.erase( hash );
+		std::istringstream in( line );
+
+		int frame = 0;
+		if( !( in >> frame ) )
+			continue;
+
+		std::vector< std::string > words;
+		std::string word;
+		while( in >> word )
+			words.push_back( word );
+		if( words.size() < 2 )
+		{
+			error = path + ":" + std::to_string( lineNumber ) + ": expected `frame Parameter Name value`";
+			return {};
+		}
+
+		const float value = std::strtof( words.back().c_str(), nullptr );
+		words.pop_back();
+		std::string name = words.front();
+		for( size_t i = 1; i < words.size(); ++i )
+			name += " " + words[ i ];
+
+		tracks[ name ].emplace_back( frame, value );
+	}
+
+	for( auto& entry : tracks )
+		std::sort( entry.second.begin(), entry.second.end() );
+	return tracks;
+}
+
+float valueAt( const Track& track, int frame )
+{
+	if( track.empty() )
+		return 0.0f;
+	if( frame <= track.front().first )
+		return track.front().second;
+	if( frame >= track.back().first )
+		return track.back().second;
+
+	for( size_t i = 1; i < track.size(); ++i )
+	{
+		if( frame <= track[ i ].first )
+		{
+			const auto& a    = track[ i - 1 ];
+			const auto& b    = track[ i ];
+			const float span = static_cast< float >( b.first - a.first );
+			const float u    = span > 0.0f ? ( static_cast< float >( frame - a.first ) / span ) : 1.0f;
+			return a.second + ( b.second - a.second ) * u;
+		}
+	}
+	return track.back().second;
+}
+
+//---------------------------------------------------------------------------
 void usage()
 {
 	std::printf(
@@ -2407,7 +2492,16 @@ void usage()
 		"                    that need none; says loudly what it skipped. For CI.\n"
 		"  --allow-no-gl     with the rendering checks: SKIP loudly, not FAIL, when\n"
 		"                    no GL 4.1 context can be created at all\n"
-		"  --bench           720p, 1080p and 4K\n" );
+		"  --bench           720p, 1080p and 4K\n"
+		"\n"
+		"  --pipe            raw RGBA frames (top row first) on stdin, the same on\n"
+		"                    stdout: the fleet's filming format. Frame n is clocked\n"
+		"                    at n / --fps. A partial frame at EOF ends the stream\n"
+		"                    (exit 0); a closed stdout exits 1; a cue naming no\n"
+		"                    parameter exits 2 before any frame\n"
+		"  --script PATH     cues for --pipe: 'frame Name Value' per line, '#'\n"
+		"                    comments; '@audio' is the spectrum level\n"
+		"  --fps N           the clock for --pipe (default 60)\n" );
 }
 } // namespace
 
@@ -2422,6 +2516,9 @@ int main( int argc, char** argv )
 	std::vector< std::pair< std::string, float > > overrides;
 	std::vector< std::pair< std::string, int > > presses;
 	std::vector< std::string > modes;
+	bool pipe = false;
+	std::string scriptPath;
+	double fps = 60.0;
 
 	for( int i = 1; i < argc; ++i )
 	{
@@ -2450,6 +2547,12 @@ int main( int argc, char** argv )
 			audioLevel = std::strtof( next().c_str(), nullptr );
 		else if( arg == "--motion" )
 			motion = true;
+		else if( arg == "--pipe" )
+			pipe = true;
+		else if( arg == "--script" )
+			scriptPath = next();
+		else if( arg == "--fps" )
+			fps = std::strtod( next().c_str(), nullptr );
 		else if( arg == "--set" )
 		{
 			const std::string assignment = next();
@@ -2511,7 +2614,7 @@ int main( int argc, char** argv )
 		modes = expanded;
 	}
 
-	if( !modes.empty() )
+	if( !modes.empty() && !pipe )
 	{
 		for( const std::string& mode : modes )
 			if( mode == "--list" )
@@ -2592,6 +2695,168 @@ int main( int argc, char** argv )
 
 		std::printf( "%d checks, %d failed\n", g_checks, g_failures );
 		return g_failures == 0 ? 0 : 1;
+	}
+
+	//-----------------------------------------------------------------------
+	// --pipe: footage through the real plugin, in the fleet's frame format.
+	//-----------------------------------------------------------------------
+	if( pipe )
+	{
+		//A reader that hangs up must end the take with exit 1 and a message,
+		//not SIGPIPE's silent 141: write() then fails and the loop says so.
+		std::signal( SIGPIPE, SIG_IGN );
+		if( !( fps > 0.0 ) )
+		{
+			std::fprintf( stderr, "sstest: --fps must be positive\n" );
+			return 2;
+		}
+
+		std::map< std::string, Track > tracks;
+		if( !scriptPath.empty() )
+		{
+			std::string error;
+			tracks = loadScript( scriptPath, error );
+			if( !error.empty() )
+			{
+				std::fprintf( stderr, "sstest: %s\n", error.c_str() );
+				return 2;
+			}
+		}
+
+		CGLContextObj context = createContext();
+		if( context == nullptr )
+		{
+			std::fprintf( stderr, "sstest: could not create an OpenGL 4.1 core context\n" );
+			return 1;
+		}
+		int status = 0;
+		{
+			Target target;
+			if( !target.Create( width, height ) )
+			{
+				std::fprintf( stderr, "sstest: output framebuffer is incomplete\n" );
+				return 1;
+			}
+			const size_t bytes = static_cast< size_t >( width ) * height * 4;
+			std::vector< unsigned char > in( bytes ), flipped( bytes );
+			const GLuint input = makeInput( flipped, width, height );
+
+			Instance instance( width, height );
+			if( !instance.ok )
+				return 1;
+
+			auto indexOf = [ & ]( const std::string& name ) -> int {
+				for( unsigned int p = 0; p < instance.plugin.GetNumParams(); ++p )
+				{
+					const char* declared = instance.plugin.GetParamName( p );
+					if( declared != nullptr && name == declared )
+						return static_cast< int >( p );
+				}
+				return -1;
+			};
+
+			for( const auto& o : overrides )
+			{
+				const int index = indexOf( o.first );
+				if( index < 0 )
+				{
+					std::fprintf( stderr, "sstest: no parameter named '%s' (try --list)\n", o.first.c_str() );
+					return 2;
+				}
+				instance.plugin.SetFloatParameter( static_cast< unsigned int >( index ), o.second );
+			}
+			for( const auto& pr : presses )
+				if( indexOf( pr.first ) < 0 )
+				{
+					std::fprintf( stderr, "sstest: no parameter named '%s' (try --list)\n", pr.first.c_str() );
+					return 2;
+				}
+
+			std::map< unsigned int, Track > automation;
+			const Track* audioTrack = nullptr;
+			for( const auto& entry : tracks )
+			{
+				if( entry.first == "@audio" )
+				{
+					audioTrack = &entry.second;
+					continue;
+				}
+				const int index = indexOf( entry.first );
+				if( index < 0 || static_cast< unsigned int >( index ) >= Slowscan::SS_ABOUT_FIRST )
+				{
+					std::fprintf( stderr, "sstest: the script names '%s', which is not a parameter (try --list)\n", entry.first.c_str() );
+					return 2;
+				}
+				automation[ static_cast< unsigned int >( index ) ] = entry.second;
+			}
+
+			const size_t stride = static_cast< size_t >( width ) * 4;
+			for( int f = 0;; ++f )
+			{
+				size_t got = 0;
+				while( got < bytes )
+				{
+					const ssize_t n = read( STDIN_FILENO, in.data() + got, bytes - got );
+					if( n <= 0 )
+						break;
+					got += static_cast< size_t >( n );
+				}
+				//A partial frame at the end of a pipe is the end of the stream,
+				//not a frame to render: only whole frames ever come out.
+				if( got < bytes )
+					break;
+
+				//Top row first on the wire, bottom row first in a GL texture.
+				for( int y = 0; y < height; ++y )
+					std::memcpy( flipped.data() + static_cast< size_t >( height - 1 - y ) * stride, in.data() + static_cast< size_t >( y ) * stride, stride );
+				updateInput( input, flipped, width, height );
+
+				//Through the plugin's own setter, so a cue moves the same thing
+				//an operator's slider would.
+				for( const auto& track : automation )
+					instance.plugin.SetFloatParameter( track.first, valueAt( track.second, f ) );
+				for( const auto& pr : presses )
+					if( pr.second == f )
+						instance.press( static_cast< Slowscan::ParamID >( indexOf( pr.first ) ) );
+				const double seconds = static_cast< double >( f ) / fps;
+				const float level    = audioTrack != nullptr ? valueAt( *audioTrack, f ) : audioLevel;
+				if( level >= 0.0f )
+					injectSpectrum( instance.plugin, level, seconds );
+
+				Image img = render( instance, target, input, width, height, seconds );
+				if( glGetError() != GL_NO_ERROR )
+				{
+					std::fprintf( stderr, "sstest: GL error at frame %d\n", f );
+					status = 1;
+					break;
+				}
+				//Premultiplied out; the colour is already the over-black composite.
+				for( size_t i = 3; i < img.px.size(); i += 4 )
+					img.px[ i ] = 255;
+
+				size_t written = 0;
+				while( written < bytes )
+				{
+					const ssize_t put = write( STDOUT_FILENO, img.px.data() + written, bytes - written );
+					if( put <= 0 )
+						break;
+					written += static_cast< size_t >( put );
+				}
+				//The reader has gone. Rendering on into a closed pipe is work
+				//nobody will see, and a short frame on stdout is worse than none.
+				if( written < bytes )
+				{
+					std::fprintf( stderr, "sstest: stdout closed at frame %d\n", f );
+					status = 1;
+					break;
+				}
+			}
+			glDeleteTextures( 1, &input );
+			target.Destroy();
+		}
+		CGLSetCurrentContext( nullptr );
+		CGLDestroyContext( context );
+		return status;
 	}
 
 	//-----------------------------------------------------------------------

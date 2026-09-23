@@ -37,6 +37,9 @@
 #                   --raster      the lean, fitted again in the rendered frame
 #                   --negative    the checks can FAIL: twelve broken models,
 #                                 each caught by the bound that should catch it
+#   pipe          the fleet's --pipe frame format: a partial frame at EOF is
+#                 the end of the stream, a cue naming no control is refused,
+#                 and a reader that hangs up ends the run with exit 1.
 #   sweep         does every control change the picture. A GLSL uniform whose
 #                 name does not match the C++ is ignored without a word.
 #   bench         the render cost, for the record. Not pass/fail.
@@ -91,6 +94,51 @@ for size in 320x180 1280x720; do
 		fi
 	done
 done
+
+#---------------------------------------------------------------------------
+# --pipe, in the fleet's frame format. Two and a half frames in must be exactly
+# two frames out and a clean exit -- a partial frame is the end of the stream,
+# never a frame -- a cue naming no parameter must be refused rather than
+# silently doing nothing to a take, and a reader that hangs up must end the
+# run with exit 1, not SIGPIPE's silent 141.
+#---------------------------------------------------------------------------
+step "pipe"
+frame=$(( 64 * 36 * 4 ))
+raw=$( mktemp ); cues=$( mktemp )
+head -c $(( frame * 5 / 2 )) /dev/zero > "$raw"
+got=$( "$SSTEST" --pipe --size 64x36 < "$raw" 2>/dev/null | wc -c | tr -d ' ' )
+status=${PIPESTATUS[0]}
+if [ "$status" -eq 0 ] && [ "$got" = "$(( frame * 2 ))" ]; then
+	pass "2.5 frames in, exactly 2 frames out, clean exit"
+else
+	fail "2.5 frames in gave $got bytes out (want $(( frame * 2 ))), exit $status"
+fi
+# Read from a file, not a pipe: a writer killed by SIGPIPE would fail the
+# pipeline whatever sstest did, and the refusal would pass for the wrong reason.
+printf '0 No Such Control 0.5\n' > "$cues"
+"$SSTEST" --pipe --size 64x36 --script "$cues" < "$raw" >/dev/null 2>&1
+status=$?
+if [ "$status" -eq 2 ]; then
+	pass "a cue naming no parameter is refused (exit 2)"
+else
+	fail "a cue naming no parameter gave exit $status, not 2"
+fi
+printf '0 SNR 0.2\n0 @audio 0.0\n1 @audio 1.0\n' > "$cues"
+got=$( "$SSTEST" --pipe --size 64x36 --script "$cues" < "$raw" 2>/dev/null | wc -c | tr -d ' ' )
+if [ "$got" = "$(( frame * 2 ))" ]; then
+	pass "a cue sheet with a control and the @audio level is accepted"
+else
+	fail "a cue sheet with SNR and @audio gave $got bytes"
+fi
+head -c $(( frame * 20 )) /dev/zero > "$raw"
+"$SSTEST" --pipe --size 64x36 < "$raw" 2>/dev/null | head -c 1 >/dev/null
+status=${PIPESTATUS[0]}
+if [ "$status" -eq 1 ]; then
+	pass "a closed stdout ends the run with exit 1, not SIGPIPE"
+else
+	fail "a closed stdout gave exit $status, not 1"
+fi
+rm -f "$raw" "$cues"
 
 step "sweep"
 if out=$(python3 tools/sweep.py --binary "$SSTEST" 2>/dev/null); then
