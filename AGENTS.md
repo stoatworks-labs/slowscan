@@ -474,12 +474,9 @@ Release build, at 320×180 and 1280×720.
 - **The fading is flat** and the channel at most two paths.
 - **The decoder is one design.** MMSSTV and QSSTV differ in filter and sync detail.
 - **No OpenFX port and no browser demo.** Not required for 0.1.0.
-- **`StoatworksAbout.h` and `ATTRIBUTIONS.md` are provisional hand copies** with
-  `guide=""`, in the shape the fleet's syncs generate. Register the project and re-run
-  the syncs before the first release. `docs/USER-GUIDE.md` now exists, so the sync
-  will set `guide` and the About block gains a fourth button: the parameter count goes
-  from 25 to 26 when the header is regenerated. The guide's About section names only
-  the three buttons there are today; add the guide button to it with the sync.
+- **`StoatworksAbout.h` and `ATTRIBUTIONS.md` are generated** by stoatworks-backend's
+  `sync-about.py` and `sync-attributions.py` from the website's projects.json and the
+  attribution master lists. Edit those, not these files; the next sync overwrites them.
 - **Nothing has been through a show.**
 
 ---

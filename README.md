@@ -192,7 +192,10 @@ you care about. `--offline` runs everything that needs no GL, which is what CI d
 See [`CLAUDE.md`](CLAUDE.md) for the full command reference and
 [`AGENTS.md`](AGENTS.md) for the model and the traps.
 
+<!-- attributions:start -->
+This project is built on other people's work — see [ATTRIBUTIONS.md](ATTRIBUTIONS.md).
+<!-- attributions:end -->
+
 ## Licence
 
-MIT — see [LICENSE](LICENSE). Third-party components are listed in
-[ATTRIBUTIONS.md](ATTRIBUTIONS.md).
+MIT — see [LICENSE](LICENSE).
