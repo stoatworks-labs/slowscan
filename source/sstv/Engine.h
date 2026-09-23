@@ -36,7 +36,7 @@ public:
 	Engine();
 
 	void SetParams( const EngineParams& p );
-	/// The host's spectrum for this frame, ramped in over the next block.
+	/// The host's spectrum for this frame: the interference filter follows it.
 	void SetAudioBins( const float* bins, int count );
 	/// The source frame at the transmitter's resolution, RGBA8, top row first.
 	void SetSource( const uint8_t* rgba, int width, int height );
@@ -65,8 +65,18 @@ public:
 	/// counted from the picture's first VIS sample.
 	static int64_t LineStartSample( int mode, int line );
 
+	/// Negative control: run the signal this fraction fast. `--progressive`
+	/// must count the wrong number of lines.
+	void DebugSpeedError( double fraction ) { debugSpeedError = fraction; }
+	/// Negative control: make a per-sample process depend on Speed -- the
+	/// fade rate multiplied by it, which is what "make the fades look the
+	/// same at any Speed" would do. `--progressive`'s invariance must fail.
+	void DebugFadeTimesSpeed( bool on ) { debugFadeTimesSpeed = on; SetParams( params ); }
+
 private:
 	void manualStartIfNeeded();
+	double debugSpeedError   = 0.0;
+	bool debugFadeTimesSpeed = false;
 
 	EngineParams params;
 	Transmitter tx;
@@ -76,7 +86,6 @@ private:
 	double carry       = 0.0;
 	int64_t samplesRun = 0;
 	double lastAudio   = 0.0;
-	int pendingRamp    = 0;
 
 	int lastTxPictures = 0;
 	int rxPicturesAtTxStart = 0;

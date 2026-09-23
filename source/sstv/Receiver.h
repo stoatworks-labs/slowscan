@@ -103,6 +103,10 @@ public:
 	int LineJumps() const { return lineJumps; }
 	int ForcedStarts() const { return forcedStarts; }
 
+	/// The analytic FIR's taps, for the harness's closed forms.
+	const double* FirRe() const { return firRe; }
+	const double* FirIm() const { return firIm; }
+
 	/// The one-pole's time constant, in samples, for a cutoff.
 	static double TauSamples( double bandwidthHz );
 	/// How many samples after a frequency step from `fromHz` to `toHz` the

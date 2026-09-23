@@ -7,14 +7,17 @@
 
 	The shape of it:
 
-	  * **Nine of the eleven check groups open no GL context at all.** The
-	    chain -- tones, channel, discriminator, timing, picture -- is CPU code
-	    in `source/sstv/`, so the timing, slant, levels, threshold, progressive
-	    arrival, header, sync and clock checks step it directly and cannot
-	    depend on a rasteriser or on a raster.
-	  * **The two that rasterise run at 1920x1080 and 320x180.** The second is
-	    what CI uses and is too small to resolve every picture pixel, which the
-	    probe validator has to notice rather than quietly measure a neighbour.
+	  * **The chain's checks open no GL context at all.** Tones, channel,
+	    discriminator, timing and picture are CPU code in `source/sstv/`, so
+	    --timing, --slant, --levels, --threshold, --progressive, --vis, --sync
+	    and --clock step it directly. They are raster-free by construction:
+	    the decoder's picture is the mode's own 320x256 or 320x240.
+	  * **Three checks rasterise, at whatever --size says.** --render compares
+	    the frame with the decoder's picture byte for byte; --raster fits the
+	    slant again in the rendered frame; --negative runs both broken. They
+	    run at the dev raster AND at 320x180, which is what CI uses and too
+	    small to show every picture pixel -- which the probe validator has to
+	    notice rather than quietly measure a neighbour.
 	  * **Every tolerance is derived**, and the derivation is beside the
 	    number. AGENTS.md carries the table.
 	  * **`--negative` breaks the model and asserts the checks fail.** A check
@@ -23,8 +26,9 @@
 		sstest --list
 		sstest --out /tmp/slowscan.png --size 1920x1080 --set "Speed=0.9"
 		sstest --timing --slant --levels --threshold --progressive --vis --sync
-		sstest --clock --names --negative
-		sstest --render --bench --engine
+		sstest --clock --names --engine
+		sstest --render --raster --negative --size 320x180
+		sstest --bench
 */
 
 #include "Slowscan.h"
@@ -52,18 +56,25 @@ using namespace slowscan::sstv;
 
 namespace
 {
+constexpr double kPiD    = 3.141592653589793;
+constexpr double kTwoPiD = 6.283185307179586;
+
 //---------------------------------------------------------------------------
 // Reporting.
 //---------------------------------------------------------------------------
 int g_failures = 0;
 int g_checks   = 0;
 bool g_quiet   = false;
+std::vector< std::string > g_failedChecks;
 
 void Check( bool ok, const std::string& what )
 {
 	++g_checks;
 	if( !ok )
+	{
 		++g_failures;
+		g_failedChecks.push_back( what );
+	}
 	if( !g_quiet )
 		std::printf( "   %s  %s\n", ok ? "ok  " : "FAIL", what.c_str() );
 }
@@ -716,7 +727,7 @@ int runLevels( bool resetPhase, bool bypassLowpass )
 				worst                 = std::max( worst, std::fabs( got - expected ) );
 				++probed;
 			}
-		Check( worst <= bound, "the ramp returns within " + F( bound, 5 ) + " of (k - tau)/(W-1) over " + std::to_string( probed ) + " pixels (worst " + F( worst, 5 ) + "; bound = one step + half an 8-bit code; the spectral-splatter bound)" );
+		Check( worst <= bound, "the ramp returns within " + F( bound, 5 ) + " of (k - tau)/(W-1) over " + std::to_string( probed ) + " pixels (worst " + F( worst, 5 ) + "; bound = one step + half an 8-bit code: the discriminator's error bound on a phase-continuous staircase, which is where any spectral splatter that survives the receiver's filter lands)" );
 	}
 
 	//------------------------------------------------------------------
@@ -801,93 +812,312 @@ int runLevels( bool resetPhase, bool bypassLowpass )
 
 //---------------------------------------------------------------------------
 /// --threshold: pixel noise variance against SNR shows the FM knee.
+///
+/// Two closed forms, both computed here from the receiver's ACTUAL filters
+/// (its FIR taps and its one-pole coefficient), neither from a number this
+/// machine printed:
+///
+///  * above the knee, the linearised discriminator. The noise's quadrature
+///    component divided by the carrier amplitude is phase noise; the
+///    discriminator differentiates it; the one-pole low-passes it; a pixel
+///    interpolates two neighbouring outputs. Its variance is an integral over
+///    the filters' responses, proportional to 1/SNR: the gentle rise.
+///  * the knee, from Rice's click rate. Below threshold the phase slips a
+///    whole cycle now and then -- a click -- at a rate r erfc( sqrt( CNR ) ),
+///    r the noise's rms bandwidth about the carrier. Each click is an impulse
+///    of one cycle into the one-pole, so it adds variance r erfc fs a/(2-a).
+///    The knee is stated as the SNR where that equals the Gaussian part.
 //---------------------------------------------------------------------------
-int runThreshold()
+struct ThresholdModel
+{
+	double gaussianAt0dB = 0.0;///< pixel variance at SNR 0 dB, linear regime; scales as 10^(-SNR/10)
+	double lag5Corr      = 0.0;///< correlation of two pixels one pixel apart
+	double carrierPower  = 0.0;///< A^2 at the FIR's output
+	double noiseGain     = 0.0;///< sum |h|^2: the FIR's noise power gain
+	double rmsBandwidthHz = 0.0;
+	double clickEnergy   = 0.0;///< Hz^2 per click per second, in pixel units
+};
+
+ThresholdModel thresholdModel( double toneHz, double bandwidthHz, double pixelStepSamples )
+{
+	ThresholdModel tm;
+	const Receiver rx;
+	const double* hr = rx.FirRe();
+	const double* hi = rx.FirIm();
+	const double nu0 = toneHz / kSampleRateHz;
+
+	auto response = [ & ]( double nu ) {
+		double re = 0.0, im = 0.0;
+		for( int n = 0; n < Receiver::kFirTaps; ++n )
+		{
+			const double a = -kTwoPiD * nu * n;
+			re += hr[ n ] * std::cos( a ) - hi[ n ] * std::sin( a );
+			im += hr[ n ] * std::sin( a ) + hi[ n ] * std::cos( a );
+		}
+		return re * re + im * im;
+	};
+
+	//The carrier: cos = ( e^{+} + e^{-} ) / 2, and the FIR passes the first.
+	const double A2  = response( nu0 ) / 4.0;
+	tm.carrierPower  = A2;
+	for( int n = 0; n < Receiver::kFirTaps; ++n )
+		tm.noiseGain += hr[ n ] * hr[ n ] + hi[ n ] * hi[ n ];
+
+	const double a     = 1.0 - std::exp( -1.0 / Receiver::TauSamples( bandwidthHz ) );
+	const double sigma0 = Channel::NoiseSigma( 0.0 );
+
+	//R(m) of the one-pole's output, in Hz^2, by summing the PSD over a grid.
+	constexpr int kGrid = 1 << 15;
+	double R[ 8 ]       = {};
+	double m1 = 0.0, m2 = 0.0, m0 = 0.0;
+	for( int g = 0; g < kGrid; ++g )
+	{
+		const double nu   = ( g + 0.5 ) / kGrid - 0.5;
+		const double Sn1  = sigma0 * sigma0 * response( nu0 + nu );
+		const double Sn2  = sigma0 * sigma0 * response( nu0 - nu );
+		const double Sphi = ( Sn1 + Sn2 ) / ( 4.0 * A2 );
+		const double s    = std::sin( kPiD * nu );
+		const double Sd   = std::pow( kSampleRateHz / kTwoPiD, 2 ) * 4.0 * s * s * Sphi;
+		const double c    = std::cos( kTwoPiD * nu );
+		const double Hlp  = a * a / ( 1.0 - 2.0 * ( 1.0 - a ) * c + ( 1.0 - a ) * ( 1.0 - a ) );
+		for( int m = 0; m < 8; ++m )
+			R[ m ] += Sd * Hlp * std::cos( kTwoPiD * nu * m ) / kGrid;
+		//The noise's spectrum about the carrier, for Rice's r.
+		const double Sn = response( nu0 + nu );
+		m0 += Sn;
+		m1 += Sn * nu;
+		m2 += Sn * nu * nu;
+	}
+	//A pixel reads (1-u) y[k-1] + u y[k], and the pixel centres fall at
+	//every fractional u alike (the step is 5.04 samples, irrational enough
+	//over 280 pixels): E[(1-u)^2 + u^2] = 2/3, E[2u(1-u)] = 1/3.
+	const double span = kToneSpan * kToneSpan;
+	tm.gaussianAt0dB  = ( 2.0 / 3.0 * R[ 0 ] + 1.0 / 3.0 * R[ 1 ] ) / span;
+	//Correlation of neighbouring pixels, at the nearest whole lag.
+	const int lag = std::min( 7, static_cast< int >( std::lround( pixelStepSamples ) ) );
+	tm.lag5Corr   = R[ lag ] / R[ 0 ];
+	tm.rmsBandwidthHz = std::sqrt( m2 / m0 ) * kSampleRateHz;
+	(void)m1;
+	//A click is one cycle of phase: sum over the discriminator's output of
+	//fs Hz. Through the one-pole (impulse response a(1-a)^k) its energy is
+	//fs^2 a / (2 - a); Poisson at N a second, i.e. N/fs a sample, it adds
+	//N fs a / (2 - a) Hz^2 of variance (Campbell's theorem).
+	tm.clickEnergy = kSampleRateHz * a / ( 2.0 - a ) / span;
+	return tm;
+}
+
+double thresholdGaussian( const ThresholdModel& tm, double snrDb )
+{
+	return tm.gaussianAt0dB * std::pow( 10.0, -snrDb / 10.0 );
+}
+
+double thresholdCnr( const ThresholdModel& tm, double snrDb )
+{
+	const double s = Channel::NoiseSigma( snrDb );
+	return tm.carrierPower / ( s * s * tm.noiseGain );
+}
+
+double thresholdClicks( const ThresholdModel& tm, double snrDb )
+{
+	return tm.rmsBandwidthHz * std::erfc( std::sqrt( thresholdCnr( tm, snrDb ) ) ) * tm.clickEnergy;
+}
+
+int runThreshold( double snrOffsetDb )
 {
 	Say( "threshold: pixel noise variance against SNR\n\n" );
 
 	const int mode    = kMartinM1;
 	const ModeSpec& m = Mode( mode );
-	constexpr int kLines = 40;
+	constexpr int kLines  = 40;
+	constexpr int kFirstRow = 4;
+	constexpr int kMargin = 20;
+	constexpr int kGrey   = 128;
+	const double toneHz   = kToneBlack + kToneSpan * kGrey / 255.0;
 
-	const std::vector< double > snrs = { 40, 30, 25, 20, 15, 10, 5, 0, -5 };
+	const ThresholdModel tm = thresholdModel( toneHz, 1200.0, pixelSamples( mode ) );
+
+	//The knee, by the textbook's definition: the SNR where the output noise
+	//is 1 dB worse than the above-threshold formula says. Solved by
+	//bisection on the closed forms; the click term falls like e^{-CNR} and
+	//the Gaussian like 1/CNR, so the excess is monotonic and there is one
+	//crossing. `clickScale` and `gaussianError` are for the tolerance.
+	const double kOneDb = std::pow( 10.0, 0.1 );
+	auto solveKnee      = [ & ]( double clickScale, double gaussianError ) {
+		double lo = -10.0, hi = 20.0;
+		for( int it = 0; it < 60; ++it )
+		{
+			const double mid = 0.5 * ( lo + hi );
+			const double g   = thresholdGaussian( tm, mid );
+			const double e   = ( g * ( 1.0 + gaussianError / thresholdCnr( tm, mid ) ) + clickScale * thresholdClicks( tm, mid ) ) / g;
+			if( e > kOneDb )
+				lo = mid;
+			else
+				hi = mid;
+		}
+		return 0.5 * ( lo + hi );
+	};
+	const double kneeDb = solveKnee( 1.0, 0.0 );
+	//Tolerance, derived from the model's two known approximations:
+	//  * Rice's rate treats a click as an impulse; a real click is as wide
+	//    as the FIR (1/1500 s, seven samples) and carries less energy through
+	//    the one-pole. A factor of three in click energy moves the knee by
+	//    `slip`, solved from the same closed forms.
+	//  * the linearised Gaussian is first order: its own error is up to
+	//    1/CNR of it, which near the knee is a sizeable fraction of the 1 dB
+	//    being looked for. That moves the knee by `lin`.
+	//  plus a quarter of the 1 dB grid the measurement interpolates on.
+	const double slip      = std::fabs( solveKnee( 1.0 / 3.0, 0.0 ) - kneeDb );
+	const double lin       = std::fabs( solveKnee( 1.0, 1.0 ) - kneeDb );
+	const double kneeTol   = slip + lin + 0.25;
+	Say( "   the receiver's filters: carrier power %.4f, noise gain %.4f, rms bandwidth %.0f Hz about the tone\n",
+	     tm.carrierPower, tm.noiseGain, tm.rmsBandwidthHz );
+	Say( "   stated knee (1 dB worse than the linear law): %.2f dB SNR in 3 kHz, a CNR of %.2f dB in the receiver's filter\n\n",
+	     kneeDb, 10.0 * std::log10( thresholdCnr( tm, kneeDb ) ) );
+
+	std::vector< double > snrs;
+	for( double s : { 40.0, 30.0, 25.0, 20.0, 15.0 } )
+		snrs.push_back( s );
+	for( int s = 12; s >= -6; --s )
+		snrs.push_back( s );
+
 	std::vector< double > variance;
-
-	Say( "   %8s %14s %12s\n", "SNR dB", "pixel var", "x per 5 dB" );
-	for( size_t i = 0; i < snrs.size(); ++i )
+	int samples = 0;
+	Say( "   %8s %12s %12s %12s %8s\n", "SNR dB", "measured", "Gaussian", "+ clicks", "excess" );
+	for( double snr : snrs )
 	{
 		Engine e;
 		EngineParams p  = cleanParams( mode );
-		p.channel.snrDb = snrs[ i ];
+		p.channel.snrDb = snr;
 		e.SetParams( p );
-		const std::vector< uint8_t > img = flatSource( m.width, m.height, 128 );
+		e.Ch().DebugSnrOffsetDb( snrOffsetDb );
+		const std::vector< uint8_t > img = flatSource( m.width, m.height, kGrey );
 		e.SetSource( img.data(), m.width, m.height );
 		e.Run( static_cast< int >( Engine::LineStartSample( mode, kLines ) ) + 200 );
 
 		double sum = 0, sumSq = 0;
 		int n = 0;
-		for( int row = 4; row < kLines; ++row )
-			for( int px = 20; px < m.width - 20; ++px )
+		for( int row = kFirstRow; row < kLines; ++row )
+			for( int px = kMargin; px < m.width - kMargin; ++px )
 			{
 				const double v = e.Rx().Plane( 0 )[ static_cast< size_t >( row ) * m.width + px ];
 				sum += v;
 				sumSq += v * v;
 				++n;
 			}
+		samples      = n;
 		const double var = sumSq / n - ( sum / n ) * ( sum / n );
 		variance.push_back( var );
-		if( i == 0 )
-			Say( "   %8.0f %14.3e\n", snrs[ i ], var );
-		else
-			Say( "   %8.0f %14.3e %12.2f\n", snrs[ i ], var, var / variance[ i - 1 ] );
+		const double g = thresholdGaussian( tm, snr );
+		Say( "   %8.0f %12.3e %12.3e %12.3e %8.2f\n", snr, var, g, g + thresholdClicks( tm, snr ), var / g );
 	}
-
-	//Above the knee the discriminator's output noise is proportional to the
-	//noise power: 5 dB is x3.162. The ratio is estimated from 36 lines x 280
-	//pixels = 10080 samples, whose variance estimate has a relative standard
-	//error of sqrt( 2/N ) = 1.4%; the next term in the expansion is 1/CNR,
-	//under 1% at 20 dB. 10% either way is seven of those.
-	auto ratio = [ & ]( double hi, double lo ) {
-		size_t a = std::find( snrs.begin(), snrs.end(), hi ) - snrs.begin();
-		size_t b = std::find( snrs.begin(), snrs.end(), lo ) - snrs.begin();
-		return variance[ b ] / variance[ a ];
+	auto at = [ & ]( double snr ) {
+		return variance[ std::find( snrs.begin(), snrs.end(), snr ) - snrs.begin() ];
 	};
-	const double linear = std::pow( 10.0, 0.5 );
-	for( auto pair : { std::pair< double, double >{ 30, 25 }, std::pair< double, double >{ 25, 20 } } )
+
+	//------------------------------------------------------------------
+	// Above the knee: the measured variance IS the linearised closed form.
+	//
+	// Tolerance: the sample variance of N correlated Gaussians has relative
+	// standard error sqrt( 2 (1 + 2 rho^2) / N ), rho the correlation of
+	// neighbouring pixels (the closed form's own R, at one pixel's lag; the
+	// next neighbour's is squared again and below 1e-3). Four of those, plus
+	// the linearisation's own error, which is first order in 1/CNR.
+	//------------------------------------------------------------------
+	const double stderrRel = std::sqrt( 2.0 * ( 1.0 + 2.0 * tm.lag5Corr * tm.lag5Corr ) / samples );
+	Say( "\n   %d pixels a point, neighbour correlation %.3f, relative standard error %.2f%%\n\n", samples, tm.lag5Corr, 100.0 * stderrRel );
+	for( double snr : { 30.0, 25.0, 20.0, 15.0 } )
 	{
-		const double r = ratio( pair.first, pair.second );
-		Check( r >= linear * 0.9 && r <= linear * 1.1,
-		       "above the knee, " + F( pair.first, 0 ) + " -> " + F( pair.second, 0 ) + " dB multiplies the variance by " + F( r, 2 ) + " (the linear law's 3.16, tolerance 10%)" );
+		const double g   = thresholdGaussian( tm, snr );
+		const double tol = 4.0 * stderrRel + 1.0 / thresholdCnr( tm, snr );
+		const double rel = at( snr ) / g - 1.0;
+		Check( std::fabs( rel ) <= tol,
+		       "above the knee at " + F( snr, 0 ) + " dB the variance is " + F( 100.0 * rel, 2 ) + "% from the linearised closed form (tolerance " + F( 100.0 * tol, 2 ) + "% = 4 standard errors + 1/CNR)" );
+	}
+	//...so it rises gently: the linear law, 10^(5/10) per 5 dB.
+	{
+		const double r   = at( 15.0 ) / at( 20.0 );
+		const double tol = 4.0 * std::sqrt( 2.0 ) * stderrRel + 1.0 / thresholdCnr( tm, 15.0 );
+		Check( std::fabs( r / std::sqrt( 10.0 ) - 1.0 ) <= tol,
+		       "gently: 20 -> 15 dB multiplies the variance by " + F( r, 3 ) + ", the linear law's 3.162 (tolerance " + F( 100.0 * tol, 1 ) + "%)" );
 	}
 
-	//Below it the clicks take over and the variance climbs far faster than
-	//the linear law: at least twice as fast, which is the stated knee.
-	//The knee sits where the CNR in the FIR's 1.5 kHz passband reaches about
-	//10 dB, which is 7 dB in the 3 kHz the SNR control is stated in.
-	const double steep = ratio( 10, 5 );
-	Check( steep >= 2.0 * linear,
-	       "below the knee, 10 -> 5 dB multiplies the variance by " + F( steep, 2 ) + ", at least twice the linear law's 3.16: the FM threshold, at about 7 dB in 3 kHz" );
+	//------------------------------------------------------------------
+	// The knee, measured the same way it was stated: the highest SNR at
+	// which the variance is 1 dB over the linearised closed form,
+	// interpolated in log on the 1 dB grid.
+	//------------------------------------------------------------------
+	double measuredKnee = std::nan( "" );
+	for( size_t i = 1; i < snrs.size(); ++i )
+	{
+		const double e0 = variance[ i - 1 ] / thresholdGaussian( tm, snrs[ i - 1 ] );
+		const double e1 = variance[ i ] / thresholdGaussian( tm, snrs[ i ] );
+		if( e0 < kOneDb && e1 >= kOneDb )
+		{
+			const double f = ( std::log( kOneDb ) - std::log( e0 ) ) / ( std::log( e1 ) - std::log( e0 ) );
+			measuredKnee   = snrs[ i - 1 ] + f * ( snrs[ i ] - snrs[ i - 1 ] );
+			break;
+		}
+	}
+	Check( std::isfinite( measuredKnee ) && std::fabs( measuredKnee - kneeDb ) <= kneeTol,
+	       "the knee: the variance is 1 dB over the linear law at " + F( measuredKnee, 2 ) + " dB, against Rice's " + F( kneeDb, 2 ) + " dB (tolerance " + F( kneeTol, 2 ) + " dB = " + F( slip, 2 ) + " for click width + " + F( lin, 2 ) + " for linearisation + 0.25 grid)" );
+
+	//------------------------------------------------------------------
+	// Gently above, steeply below. The variance's slope in dB per dB of
+	// SNR, on the chord from 5 dB above the stated knee down to it, and on
+	// the chord from the knee to 5 dB below it. The linear law is exactly
+	// 1 dB/dB. The curve must be STEEPENING through the knee: the chord
+	// below is steeper than the chord above -- no threshold at all would
+	// make them equal -- and the far chord (15 -> 10 dB) is the linear law.
+	//------------------------------------------------------------------
+	auto varAt = [ & ]( double snr ) {
+		//Log-linear interpolation on the 1 dB grid.
+		for( size_t i = 1; i < snrs.size(); ++i )
+			if( snrs[ i ] <= snr && snr <= snrs[ i - 1 ] )
+			{
+				const double f = ( snrs[ i - 1 ] - snr ) / ( snrs[ i - 1 ] - snrs[ i ] );
+				return std::exp( std::log( variance[ i - 1 ] ) + f * ( std::log( variance[ i ] ) - std::log( variance[ i - 1 ] ) ) );
+			}
+		return std::nan( "" );
+	};
+	auto slope = [ & ]( double hiDb, double loDb ) {
+		return 10.0 * std::log10( varAt( loDb ) / varAt( hiDb ) ) / ( hiDb - loDb );
+	};
+	{
+		const double far   = slope( 15.0, 10.0 );
+		const double above = slope( kneeDb + 5.0, kneeDb );
+		const double below = slope( kneeDb, kneeDb - 5.0 );
+		const double tol   = 10.0 * std::log10( 1.0 + 4.0 * std::sqrt( 2.0 ) * stderrRel + 1.0 / thresholdCnr( tm, 10.0 ) ) / 5.0;
+		Check( std::fabs( far - 1.0 ) <= tol,
+		       "far above, 15 -> 10 dB, the variance rises " + F( far, 3 ) + " dB per dB: the linear law's 1 (tolerance " + F( tol, 3 ) + ")" );
+		Check( below > above && above < below - tol,
+		       "steepening through the knee: " + F( above, 3 ) + " dB/dB on the 5 dB above it, " + F( below, 3 ) + " on the 5 dB below it (clear by more than " + F( tol, 3 ) + ")" );
+	}
 	return g_failures;
 }
 
 //---------------------------------------------------------------------------
 /// --progressive: after t seconds at Speed s, floor( t s / T_line ) lines.
 //---------------------------------------------------------------------------
-int runProgressive()
+int runProgressive( double speedError, bool fadeTimesSpeed )
 {
 	Say( "progressive: lines replaced against floor( t * s / T_line )\n\n" );
 
-	const int mode    = kMartinM1;
-	const ModeSpec& m = Mode( mode );
-	const double lineS = lineSamples( mode );
+	const int mode       = kMartinM1;
+	const ModeSpec& m    = Mode( mode );
+	const double lineS   = lineSamples( mode );
 	const double headerS = ( kVisMicros + m.leadInMicros ) * kSampleRateHz / 1e6;
+	const double pxS     = pixelSamples( mode );
 
-	//A row is replaced when its last pixel lands: the last scan's last pixel
-	//centre, half a pixel plus the trailing separator before the line ends,
-	//seen through the FIR's group delay and 5 tau of lowpass. Sample points
-	//closer than that to a line boundary are not asserted, and the count of
+	//A row counts as replaced when its last SETTLED red pixel reads the new
+	//value -- the last pixel `--levels` proves exact, clear of the FIR's
+	//reach into the separator after the scan. It lands (settled - 0.5)
+	//pixels plus the trailing separator before the line ends, seen through
+	//the FIR's group delay and 5 tau of one-pole. Sample points closer than
+	//that to a line boundary, either side, are not asserted; the count of
 	//those that are is asserted instead, so the check cannot go vacuous.
-	const double guard = pixelSamples( mode ) + ( m.segments[ m.segmentCount - 1 ].micros * kSampleRateHz / 1e6 )
+	const int settled  = static_cast< int >( std::ceil( ( Receiver::kFirTaps + 5.0 * Receiver::TauSamples( 1200.0 ) ) / pxS ) ) + 1;
+	const int probePx  = m.width - settled - 1;
+	const double guard = ( settled + 1 ) * pxS + ( m.segments[ m.segmentCount - 1 ].micros * kSampleRateHz / 1e6 )
 	                     + Receiver::kGroupDelay + 5.0 * Receiver::TauSamples( 1200.0 ) + 2.0;
 
 	for( double speed : { 40.0, 120.0, 1.0 } )
@@ -896,45 +1126,92 @@ int runProgressive()
 		EngineParams p = cleanParams( mode );
 		p.speed        = speed;
 		e.SetParams( p );
+		e.DebugSpeedError( speedError );
 		const std::vector< uint8_t > img = flatSource( m.width, m.height, 128 );
 		e.SetSource( img.data(), m.width, m.height );
 
 		int asserted = 0, wrong = 0, frames = 0;
 		int64_t counted = 0;
-		for( int f = 1; f <= 200; ++f )
+		const int maxFrames = static_cast< int >( std::ceil( ( headerS + m.height * lineS ) / ( speed * kSampleRateHz / 60.0 ) ) ) + 2;
+		for( int f = 1; f <= std::min( maxFrames, 600 ); ++f )
 		{
 			const int n = e.SamplesForFrame( 1.0 / 60.0 );
 			counted += n;
 			e.Run( n );
 			++frames;
 
-			const double t     = static_cast< double >( e.SamplesRun() ) / kSampleRateHz;
-			const double tPic  = t * kSampleRateHz - headerS;//samples into the picture
-			if( tPic >= m.height * lineS )
+			//t is VIDEO time; the claim is about t * s.
+			const double t    = frames / 60.0;
+			const double tPic = t * speed * kSampleRateHz - headerS;//signal samples into the picture
+			if( tPic >= m.height * lineS - guard )
 				break;//the first picture is over
 			const double expectedLines = tPic < 0 ? 0 : std::floor( tPic / lineS );
 			const double within        = tPic - expectedLines * lineS;
 			if( tPic >= 0 && ( within < guard || within > lineS - guard ) )
 				continue;
 
-			//Rows replaced: the source is flat 128 and the picture was black,
-			//so a row is replaced when its red plane reads 128 at the end.
 			int rows = 0;
 			for( int row = 0; row < m.height; ++row )
-				if( std::lround( e.Rx().Plane( 0 )[ static_cast< size_t >( row ) * m.width + m.width - 1 ] * 255.0 ) == 128 )
+				if( std::lround( e.Rx().Plane( 0 )[ static_cast< size_t >( row ) * m.width + probePx ] * 255.0 ) == 128 )
 					++rows;
 			++asserted;
 			if( rows != static_cast< int >( expectedLines ) )
 			{
 				++wrong;
-				Say( "   frame %d: %d rows, expected %.0f (t=%.3f s signal)\n", f, rows, expectedLines, t );
+				Say( "   frame %d: %d rows, expected %.0f (t s = %.3f s of signal)\n", f, rows, expectedLines, t * speed );
 			}
 		}
 		//The sample count is t * s * fs to the carry.
 		const double expectedSamples = frames / 60.0 * speed * kSampleRateHz;
 		Check( std::fabs( counted - expectedSamples ) < 1.0, "at " + F( speed, 0 ) + "x, " + std::to_string( frames ) + " frames ran " + std::to_string( counted ) + " samples = t*s*fs within the carried fraction (" + F( expectedSamples, 2 ) + ")" );
-		Check( asserted >= ( speed >= 40 ? 60 : 1 ) && wrong == 0,
-		       "at " + F( speed, 0 ) + "x, all " + std::to_string( asserted ) + " asserted frames had exactly floor( t s / T_line ) rows replaced (wrong: " + std::to_string( wrong ) + "; guard " + F( guard, 1 ) + " samples either side of a line boundary)" );
+		//At 1x a line is 26.8 frames and the guard 2.3% of it, so most frames
+		//are asserted; at 120x a line is 0.2 frames and the picture 58.
+		const int wantAsserted = speed >= 120 ? 40 : 100;
+		Check( asserted >= wantAsserted && wrong == 0,
+		       "at " + F( speed, 0 ) + "x, all " + std::to_string( asserted ) + " asserted frames had exactly floor( t s / T_line ) rows replaced (wrong: " + std::to_string( wrong ) + "; guard " + F( guard, 1 ) + " samples either side of a line boundary, at least " + std::to_string( wantAsserted ) + " asserted)" );
+	}
+
+	//------------------------------------------------------------------
+	// Speed changes nothing per sample. The same picture through a noisy,
+	// fading, echoing channel with a carrier on it, run at 1x in 1/60 s
+	// blocks and at 120x in blocks 120 times the size, lands on the same
+	// sample count -- and the decoder's planes are then IDENTICAL, bit for
+	// bit. Speed is how many samples a frame is worth and nothing else.
+	//------------------------------------------------------------------
+	{
+		EngineParams p              = cleanParams( mode );
+		p.channel.snrDb             = 12.0;
+		p.channel.fadeDepth         = 0.6;
+		p.channel.fadeRateHz        = 1.0;
+		p.channel.multipathSeconds  = 0.002;
+		p.channel.multipathLevel    = 0.4;
+		p.channel.qrmLevel          = 0.2;
+		p.channel.qrmHz             = 2100.0;
+		const std::vector< uint8_t > img = rampSource( m.width, m.height );
+		const int64_t total          = Engine::LineStartSample( mode, 24 );
+
+		std::vector< float > planes[ 2 ];
+		int64_t ran[ 2 ] = {};
+		int k            = 0;
+		for( double speed : { 1.0, 120.0 } )
+		{
+			Engine e;
+			p.speed = speed;
+			e.SetParams( p );
+			e.DebugFadeTimesSpeed( fadeTimesSpeed );
+			e.SetSource( img.data(), m.width, m.height );
+			while( e.SamplesRun() < total )
+				e.Run( static_cast< int >( std::min< int64_t >( e.SamplesForFrame( 1.0 / 60.0 ), total - e.SamplesRun() ) ) );
+			ran[ k ]    = e.SamplesRun();
+			planes[ k ] = e.Rx().Plane( 0 );
+			++k;
+		}
+		size_t differ = 0;
+		for( size_t i = 0; i < planes[ 0 ].size(); ++i )
+			if( std::memcmp( &planes[ 0 ][ i ], &planes[ 1 ][ i ], sizeof( float ) ) != 0 )
+				++differ;
+		Check( ran[ 0 ] == ran[ 1 ] && differ == 0,
+		       "Speed changes nothing per sample: 24 lines of a noisy, fading, multipath, QRM'd picture at 1x and at 120x are bit-identical (" + std::to_string( differ ) + " of " + std::to_string( planes[ 0 ].size() ) + " pixels differ)" );
 	}
 	return g_failures;
 }
@@ -1074,7 +1351,7 @@ int runSync( bool lineSync )
 //---------------------------------------------------------------------------
 /// --clock: a six-day host clock runs the same signal as a fresh one.
 //---------------------------------------------------------------------------
-int runClock()
+int runClock( bool floatClock )
 {
 	Say( "clock: the frame duration survives a six-day host clock\n\n" );
 
@@ -1083,40 +1360,44 @@ int runClock()
 	constexpr double kSixDays = 499217.238;//seconds
 	constexpr int kFrames     = 600;
 
-	std::vector< int > fresh, aged;
-	{
+	//Cumulative samples asked for after each frame, through the REAL
+	//plugin's clock handling into the engine's carry.
+	auto run = [ & ]( double origin ) {
+		std::vector< int64_t > cumulative;
 		Slowscan plugin;
 		plugin.ForceSecondsClock();
+		plugin.DebugFloatClock( floatClock );
 		Engine e;
 		e.SetParams( cleanParams( kMartinM1 ) );
+		int64_t sum = 0;
 		for( int f = 0; f < kFrames; ++f )
 		{
-			plugin.SetTime( f / 60.0 );
-			fresh.push_back( e.SamplesForFrame( plugin.FrameSecondsForTest( plugin.ElapsedSecondsForTest() ) ) );
+			plugin.SetTime( origin + f / 60.0 );
+			sum += e.SamplesForFrame( plugin.FrameSecondsForTest( plugin.ElapsedSecondsForTest() ) );
+			cumulative.push_back( sum );
 		}
-	}
-	{
-		Slowscan plugin;
-		plugin.ForceSecondsClock();
-		Engine e;
-		e.SetParams( cleanParams( kMartinM1 ) );
-		for( int f = 0; f < kFrames; ++f )
-		{
-			plugin.SetTime( kSixDays + f / 60.0 );
-			aged.push_back( e.SamplesForFrame( plugin.FrameSecondsForTest( plugin.ElapsedSecondsForTest() ) ) );
-		}
-	}
-	int differ = 0;
-	long long total = 0;
-	for( int f = 0; f < kFrames; ++f )
-	{
-		if( fresh[ f ] != aged[ f ] )
-			++differ;
-		total += aged[ f ];
-	}
-	Check( differ == 0, "600 frames at t = 0 and at t = 499,217 s ask for identical sample counts (differ: " + std::to_string( differ ) + "; " + std::to_string( total ) + " samples = 10 s at 40x)" );
+		return cumulative;
+	};
+	const std::vector< int64_t > fresh = run( 0.0 );
+	const std::vector< int64_t > aged  = run( kSixDays );
 
-	//The negative control: the same difference in FLOAT is wrong.
+	//The frame durations are differences of two doubles, each within half
+	//an ULP of t (5.8e-11 s at 5e5 s). They telescope: the cumulative
+	//duration is t_f - t_0, off by at most two ULPs, 1.2e-10 s, whatever f
+	//is. Times s * fs = 441000 that is 5e-5 of a sample, so the two
+	//cumulative sample counts -- each the floor of its own exact sum, which
+	//is what the carry makes them -- differ by at most one, and only on the
+	//frames where the sum lands within 5e-5 of a whole sample. At 40x a
+	//frame is exactly 7350 samples, so it lands ON one every frame: the
+	//per-frame counts CAN legitimately differ (7349 then 7351), the running
+	//total cannot drift.
+	int64_t worst = 0;
+	for( int f = 0; f < kFrames; ++f )
+		worst = std::max( worst, std::llabs( fresh[ f ] - aged[ f ] ) );
+	Check( worst <= 1 && std::llabs( fresh.back() - aged.back() ) <= 1,
+	       "600 frames at t = 0 and at t = 499,217 s: the running sample totals never differ by more than one sample (worst " + std::to_string( worst ) + ", totals " + std::to_string( fresh.back() ) + " and " + std::to_string( aged.back() ) + " = 10 s at 40x)" );
+
+	//The trap, stated as a measurement: the same subtraction in a float.
 	int wrongFloat = 0;
 	for( int f = 1; f < kFrames; ++f )
 	{
@@ -1176,52 +1457,6 @@ int runNames()
 	Check( sized, "every parameter name is 16 characters or fewer" );
 	Check( unique, "every parameter name is unique" );
 	Check( plugin.GetNumParams() == Slowscan::SS_COUNT, "the host is told about all " + std::to_string( Slowscan::SS_COUNT ) + " parameters (got " + std::to_string( plugin.GetNumParams() ) + ")" );
-	return g_failures;
-}
-
-//---------------------------------------------------------------------------
-/// --negative: break the model, and every check above must notice.
-//---------------------------------------------------------------------------
-int runNegative()
-{
-	std::printf( "negative: each broken model must fail its check\n\n" );
-
-	struct Case
-	{
-		const char* what;
-		std::function< void() > run;
-	};
-	const Case cases[] = {
-		{ "timing: a line 50 ppm long", [] { runTiming( 50.0 ); } },
-		{ "slant: the Clock Error term dropped", [] { runSlant( true ); } },
-		{ "levels: the phase reset at every pixel (spectral splatter)", [] { runLevels( true, false ); } },
-		{ "levels: no lowpass", [] { runLevels( false, true ); } },
-		{ "vis: the parity bit sent wrong", [] { runVis( true ); } },
-		{ "sync: Line Sync switched off", [] { runSync( false ); } },
-	};
-
-	const int outerChecks = g_checks;
-	int outerFailures     = g_failures;
-	for( const Case& c : cases )
-	{
-		g_quiet             = true;
-		const int before    = g_failures;
-		const int checksBefore = g_checks;
-		c.run();
-		const int raised    = g_failures - before;
-		const int ran       = g_checks - checksBefore;
-		g_quiet             = false;
-		//The broken run's own failures are the point; they are not this
-		//run's failures.
-		g_failures = before;
-		g_checks   = checksBefore;
-		++g_checks;
-		if( raised == 0 )
-			++g_failures;
-		std::printf( "   %s  %s: %d of %d checks failed\n", raised > 0 ? "ok  " : "FAIL", c.what, raised, ran );
-	}
-	(void)outerChecks;
-	(void)outerFailures;
 	return g_failures;
 }
 
@@ -1478,6 +1713,15 @@ Image render( Instance& i, const Target& t, GLuint input, int inputW, int inputH
 // The mapping between an output pixel and a picture pixel. Mirrors the
 // compose shader in float and in the same order, to PLACE probes and then
 // to VALIDATE that they landed.
+//
+// A probe is only trusted when its picture coordinate sits at least 1/16 of
+// an OUTPUT pixel from a picture-pixel boundary. The shader's uv is an
+// interpolated varying and this is a CPU float: the two can round a
+// coordinate that lands on a boundary to opposite sides of it, and at
+// 320x180 -- 0.75 output pixels to a picture pixel -- whole columns of probes
+// land within a rounding of one. 1/16 of a pixel is the sub-pixel precision
+// GL 4.1 (section 14.6.1) guarantees at the least, and rounding in a full-
+// screen quad's interpolation is orders of magnitude inside it.
 //---------------------------------------------------------------------------
 struct Mapping
 {
@@ -1485,7 +1729,10 @@ struct Mapping
 	float rx, ry, rw, rh;//the rect in output pixels, y from the top
 	int pw, ph;
 
-	bool toPicture( int ox, int oyTop, int& px, int& py ) const
+	/// The continuous picture coordinate of an output pixel's centre, x
+	/// from the left and y from the TOP, in picture pixels. False outside
+	/// the rect.
+	bool toPictureCoord( int ox, int oyTop, float& X, float& Y ) const
 	{
 		const float uvx    = ( static_cast< float >( ox ) + 0.5f ) / static_cast< float >( w );
 		const float uvy    = ( static_cast< float >( h - 1 - oyTop ) + 0.5f ) / static_cast< float >( h );
@@ -1495,9 +1742,54 @@ struct Mapping
 		const float innerY = ( uvy - oy0 ) / std::max( rh / h, 1e-6f );
 		if( innerX < 0.0f || innerX >= 1.0f || innerY < 0.0f || innerY >= 1.0f )
 			return false;
-		px = std::clamp( static_cast< int >( innerX * static_cast< float >( pw ) ), 0, pw - 1 );
-		py = std::clamp( static_cast< int >( ( 1.0f - innerY ) * static_cast< float >( ph ) ), 0, ph - 1 );
+		X = innerX * static_cast< float >( pw );
+		Y = ( 1.0f - innerY ) * static_cast< float >( ph );
 		return true;
+	}
+
+	/// The picture pixel an output pixel shows, or false when outside the
+	/// rect or too close to a boundary to say.
+	bool toPicture( int ox, int oyTop, int& px, int& py ) const
+	{
+		float X, Y;
+		if( !toPictureCoord( ox, oyTop, X, Y ) )
+			return false;
+		const float mx = ( 1.0f / 16.0f ) * pw / rw;
+		const float my = ( 1.0f / 16.0f ) * ph / rh;
+		const float fx = X - std::floor( X ), fy = Y - std::floor( Y );
+		if( fx < mx || fx > 1.0f - mx || fy < my || fy > 1.0f - my )
+			return false;
+		px = std::clamp( static_cast< int >( X ), 0, pw - 1 );
+		py = std::clamp( static_cast< int >( Y ), 0, ph - 1 );
+		return true;
+	}
+
+	/// Clearly outside the rect: at least 1/16 of an output pixel beyond it.
+	bool clearlyOutside( int ox, int oyTop ) const
+	{
+		const float cx = ox + 0.5f, cy = oyTop + 0.5f;
+		const float m  = 1.0f / 16.0f;
+		return cx < rx - m || cx > rx + rw + m || cy < ry - m || cy > ry + rh + m;
+	}
+
+	/// Whether the compose shader marks this output pixel as the cursor:
+	/// the row it shows is the cursor row, or the cursor row's centre is
+	/// inside the pixel's vertical footprint. 0 no, 1 yes, -1 within the
+	/// 1/16-pixel margin of deciding.
+	int cursorAt( int ox, int oyTop, int cursorRow ) const
+	{
+		float X, Y;
+		if( cursorRow < 0 || !toPictureCoord( ox, oyTop, X, Y ) )
+			return 0;
+		if( static_cast< int >( Y ) == cursorRow )
+			return 1;
+		const float rowsPerPixel = static_cast< float >( ph ) / rh;
+		const float half         = 0.5f * rowsPerPixel;
+		const float centre       = cursorRow + 0.5f;
+		const float margin       = ( 1.0f / 16.0f ) * rowsPerPixel;
+		if( std::fabs( centre - ( Y - half ) ) < margin || std::fabs( centre - ( Y + half ) ) < margin )
+			return -1;
+		return ( centre > Y - half && centre <= Y + half ) ? 1 : 0;
 	}
 
 	void probeFor( int px, int py, int& ox, int& oyTop ) const
@@ -1540,7 +1832,13 @@ int compareFrame( const Image& img, Slowscan& plugin, int& wrong, int& compared,
 			}
 			const unsigned char* got = img.at( ox, oy );
 			unsigned char want[ 3 ];
-			if( py == cursorRow )
+			const int cursor = map.cursorAt( ox, oy, cursorRow );
+			if( cursor < 0 )
+			{
+				++unresolved;
+				continue;
+			}
+			if( cursor > 0 )
 			{
 				want[ 0 ] = 51;
 				want[ 1 ] = 255;
@@ -1558,20 +1856,20 @@ int compareFrame( const Image& img, Slowscan& plugin, int& wrong, int& compared,
 //---------------------------------------------------------------------------
 /// --render: the frame on screen is the picture the decoder holds.
 //---------------------------------------------------------------------------
-void renderAt( int w, int h )
+int runRender( int w, int h, int rowOffset )
 {
-	std::printf( "\n  at %dx%d\n", w, h );
+	Say( "render: the frame against the decoder's picture, at %dx%d\n\n", w, h );
 
 	Target target;
 	if( !target.Create( w, h ) )
 	{
 		Check( false, "output framebuffer is complete" );
-		return;
+		return g_failures;
 	}
 	const std::vector< unsigned char > card = buildCard( w, h );
 	const GLuint input                       = makeInput( card, w, h );
 
-	constexpr int kFrames = 40;
+	constexpr int kFrames  = 40;
 	constexpr float kSpeed = 0.9f;//about 74x: forty frames is fifty seconds of signal
 
 	//------------------------------------------------------------------
@@ -1579,6 +1877,7 @@ void renderAt( int w, int h )
 	//------------------------------------------------------------------
 	{
 		Instance i( w, h );
+		i.plugin.DebugUploadRowOffset( rowOffset );
 		i.set( Slowscan::SS_SPEED, kSpeed );
 		Image img;
 		for( int f = 0; f < kFrames; ++f )
@@ -1588,33 +1887,37 @@ void renderAt( int w, int h )
 		const int cursor     = i.plugin.CursorRowForTest();
 		const int unresolved = compareFrame( img, i.plugin, wrong, compared, cursor );
 		const Receiver& rx   = i.plugin.EngineForTest().Rx();
-		Check( rx.InPicture() && rx.Line() > 40, "  the decoder is " + std::to_string( rx.Line() ) + " lines into a picture after " + std::to_string( kFrames ) + " frames" );
-		Check( wrong == 0 && compared > 0, "  every resolved probe is the decoder's pixel, byte for byte, cursor row " + std::to_string( cursor ) + " included (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
-		//At 1080p the 4:3 rect is 1440x1080 for 320x256: 4.5 x 4.2 output
-		//pixels per picture pixel, so every probe resolves. At 320x180 the
-		//rect is 240x180: 0.75 x 0.7, and most cannot -- the validator has to
-		//say so rather than measure a neighbour.
-		const bool fine = ( w * 3 >= h * 4 ? h : w * 3 / 4 ) >= rx.Height();
+		Check( rx.InPicture() && rx.Line() > 40, "the decoder is " + std::to_string( rx.Line() ) + " lines into a picture after " + std::to_string( kFrames ) + " frames" );
+		Check( wrong == 0 && compared > 0, "every resolved probe is the decoder's pixel, byte for byte, cursor row " + std::to_string( cursor ) + " included (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
+
+		//The 4:3 rect is 320x256 picture pixels on min(h, 3w/4) output rows:
+		//4.2 output rows to a line at 1080, 2.8 at 720, 0.7 at 180. With at
+		//least 1 + 1/8 output pixels to a picture pixel every probe clears
+		//the 1/16-pixel margin at both ends; below one, most cannot, and the
+		//validator has to say so rather than measure a neighbour.
+		Mapping map         = mappingFor( i.plugin, w, h );
+		const bool fine     = map.rw >= 1.125f * map.pw && map.rh >= 1.125f * map.ph;
+		const bool coarse   = map.rw < map.pw || map.rh < map.ph;
 		if( fine )
-			Check( unresolved == 0, "  every picture pixel resolves at this raster (unresolved: " + std::to_string( unresolved ) + ")" );
+			Check( unresolved == 0, "every picture pixel resolves at this raster (unresolved: " + std::to_string( unresolved ) + ")" );
+		else if( coarse )
+			Check( unresolved > 0, "the validator fires at a raster too small to resolve the picture (" + std::to_string( unresolved ) + " of " + std::to_string( rx.Width() * rx.Height() ) + " unresolved, " + std::to_string( compared ) + " still compared)" );
 		else
-			Check( unresolved > 0, "  the validator fires at a raster too small to resolve the picture (" + std::to_string( unresolved ) + " of " + std::to_string( rx.Width() * rx.Height() ) + " unresolved)" );
+			Say( "   (a raster between 1 and 1.125 output pixels a picture pixel: %d unresolved, not asserted either way)\n", unresolved );
 
 		//Outside the rect, on Fit: transparent black.
-		Mapping map = mappingFor( i.plugin, w, h );
 		int outsideWrong = 0, outsideProbed = 0;
-		for( int oy = 0; oy < h; oy += 7 )
-			for( int ox = 0; ox < w; ox += 7 )
+		for( int oy = 0; oy < h; oy += 3 )
+			for( int ox = 0; ox < w; ox += 3 )
 			{
-				int px, py;
-				if( map.toPicture( ox, oy, px, py ) )
+				if( !map.clearlyOutside( ox, oy ) )
 					continue;
 				++outsideProbed;
 				const unsigned char* p = img.at( ox, oy );
 				if( p[ 0 ] != 0 || p[ 1 ] != 0 || p[ 2 ] != 0 || p[ 3 ] != 0 )
 					++outsideWrong;
 			}
-		Check( outsideProbed > 0 && outsideWrong == 0, "  the letterbox is transparent black (" + std::to_string( outsideProbed ) + " probes, " + std::to_string( outsideWrong ) + " wrong)" );
+		Check( outsideProbed > 0 && outsideWrong == 0, "the letterbox is transparent black (" + std::to_string( outsideProbed ) + " probes, " + std::to_string( outsideWrong ) + " wrong)" );
 	}
 
 	//------------------------------------------------------------------
@@ -1622,6 +1925,7 @@ void renderAt( int w, int h )
 	//------------------------------------------------------------------
 	{
 		Instance i( w, h );
+		i.plugin.DebugUploadRowOffset( rowOffset );
 		i.set( Slowscan::SS_SPEED, kSpeed );
 		i.set( Slowscan::SS_ASPECT, float( Slowscan::kAspectFill ) );
 		i.set( Slowscan::SS_CURSOR, 0.0f );
@@ -1630,7 +1934,7 @@ void renderAt( int w, int h )
 			img = render( i, target, input, w, h, f / 60.0 );
 		int wrong = 0, compared = 0;
 		compareFrame( img, i.plugin, wrong, compared, i.plugin.CursorRowForTest() );
-		Check( i.plugin.CursorRowForTest() == -1 && wrong == 0 && compared > 0, "  Fill, Cursor off: every resolved probe is the decoder's pixel (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
+		Check( i.plugin.CursorRowForTest() == -1 && wrong == 0 && compared > 0, "Fill, Cursor off: every resolved probe is the decoder's pixel (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
 	}
 
 	//------------------------------------------------------------------
@@ -1655,18 +1959,14 @@ void renderAt( int w, int h )
 			for( int f = 0; f < 10; ++f )
 				b = render( i, target, input, w, h, f / 60.0 );
 		}
-		Check( a.px == b.px, "  Mix 0 is byte-identical across two very different settings" );
+		Check( a.px == b.px, "Mix 0 is byte-identical across two very different settings" );
 		//...and equal to the card: the clip is sampled at texel centres,
 		//which is exact for a texture the size of the output.
-		Image cardImg;
-		cardImg.w  = w;
-		cardImg.h  = h;
-		cardImg.px = card;
 		const size_t stride = static_cast< size_t >( w ) * 4;
 		std::vector< unsigned char > flipped( card.size() );
 		for( int y = 0; y < h; ++y )
 			std::memcpy( flipped.data() + static_cast< size_t >( y ) * stride, card.data() + static_cast< size_t >( h - 1 - y ) * stride, stride );
-		Check( a.px == flipped, "  ...and byte-identical to the input" );
+		Check( a.px == flipped, "...and byte-identical to the input" );
 	}
 
 	//------------------------------------------------------------------
@@ -1674,6 +1974,7 @@ void renderAt( int w, int h )
 	//------------------------------------------------------------------
 	{
 		Instance i( w, h );
+		i.plugin.DebugUploadRowOffset( rowOffset );
 		i.set( Slowscan::SS_SPEED, kSpeed );
 		for( int f = 0; f < 30; ++f )
 			render( i, target, input, w, h, f / 60.0 );
@@ -1681,12 +1982,14 @@ void renderAt( int w, int h )
 		i.plugin.EngineForTest().Rx().Composite( before );
 		const int lineBefore = i.plugin.EngineForTest().Rx().Line();
 
-		//A different output size, one frame.
+		//A different output size, one frame: 960x540 from 1280x720 or
+		//1920x1080, 480x270 from 320x180 -- a different size either way.
+		const int sw = w >= 960 ? 960 : 480, sh = w >= 960 ? 540 : 270;
 		Target small;
-		small.Create( 960, 540 );
-		const std::vector< unsigned char > smallCard = buildCard( 960, 540 );
-		const GLuint smallInput                       = makeInput( smallCard, 960, 540 );
-		Image img = render( i, small, smallInput, 960, 540, 30 / 60.0 );
+		small.Create( sw, sh );
+		const std::vector< unsigned char > smallCard = buildCard( sw, sh );
+		const GLuint smallInput                       = makeInput( smallCard, sw, sh );
+		Image img = render( i, small, smallInput, sw, sh, 30 / 60.0 );
 		std::vector< uint8_t > after;
 		i.plugin.EngineForTest().Rx().Composite( after );
 		const int lineAfter = i.plugin.EngineForTest().Rx().Line();
@@ -1702,23 +2005,23 @@ void renderAt( int w, int h )
 			if( std::memcmp( before.data() + static_cast< size_t >( row ) * pw * 3, after.data() + static_cast< size_t >( row ) * pw * 3, static_cast< size_t >( pw ) * 3 ) != 0 )
 				++changedOutside;
 		}
-		Check( lineAfter >= lineBefore && changedOutside == 0, "  a resize to 960x540 mid-run kept every row not being written (line " + std::to_string( lineBefore ) + " -> " + std::to_string( lineAfter ) + ", rows changed elsewhere: " + std::to_string( changedOutside ) + ")" );
+		Check( lineAfter >= lineBefore && changedOutside == 0, "a resize to " + std::to_string( sw ) + "x" + std::to_string( sh ) + " mid-run kept every row not being written (line " + std::to_string( lineBefore ) + " -> " + std::to_string( lineAfter ) + ", rows changed elsewhere: " + std::to_string( changedOutside ) + ")" );
 
 		for( int f = 31; f < 45; ++f )
-			img = render( i, small, smallInput, 960, 540, f / 60.0 );
+			img = render( i, small, smallInput, sw, sh, f / 60.0 );
 		int wrong = 0, compared = 0;
 		compareFrame( img, i.plugin, wrong, compared, i.plugin.CursorRowForTest() );
-		Check( wrong == 0 && compared > 0, "  ...and renders the picture exactly at the new size (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
+		Check( wrong == 0 && compared > 0, "...and renders the picture exactly at the new size (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
 
 		//Now Robot 36, restarted: a 320x240 picture, a new texture.
 		i.set( Slowscan::SS_MODE, float( Slowscan::kModeRobot36 ) );
 		i.press( Slowscan::SS_RESTART );
 		for( int f = 45; f < 90; ++f )
-			img = render( i, small, smallInput, 960, 540, f / 60.0 );
+			img = render( i, small, smallInput, sw, sh, f / 60.0 );
 		wrong = compared = 0;
 		compareFrame( img, i.plugin, wrong, compared, i.plugin.CursorRowForTest() );
 		const Receiver& rx = i.plugin.EngineForTest().Rx();
-		Check( rx.Height() == 240 && rx.InPicture() && wrong == 0 && compared > 0, "  Robot 36 after a restart: a " + std::to_string( rx.Width() ) + "x" + std::to_string( rx.Height() ) + " picture, line " + std::to_string( rx.Line() ) + ", rendered exactly (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
+		Check( rx.Height() == 240 && rx.InPicture() && wrong == 0 && compared > 0, "Robot 36 after a restart: a " + std::to_string( rx.Width() ) + "x" + std::to_string( rx.Height() ) + " picture, line " + std::to_string( rx.Line() ) + ", rendered exactly (" + std::to_string( compared ) + " compared, " + std::to_string( wrong ) + " wrong)" );
 
 		glDeleteTextures( 1, &smallInput );
 		small.Destroy();
@@ -1726,22 +2029,200 @@ void renderAt( int w, int h )
 
 	glDeleteTextures( 1, &input );
 	target.Destroy();
+	return g_failures;
 }
 
-int runRender()
+//---------------------------------------------------------------------------
+/// --raster: the slant, measured out of the RENDERED frame.
+///
+/// `--slant` fits the edge in the decoder's own planes. This fits it in
+/// the output the host would show -- the clip read back through the real
+/// readback shader, sent, decoded, uploaded and composed by the real
+/// compose shader -- at whatever raster was asked for, and converts back to
+/// picture pixels through the rect. It is the second rasteriser pass.
+//---------------------------------------------------------------------------
+int runRaster( int w, int h, bool ignoreClock )
 {
-	std::printf( "render: the frame against the decoder's picture\n" );
-	CGLContextObj context = createContext();
-	if( context == nullptr )
+	Say( "raster: the lean fitted in the rendered frame at %dx%d\n\n", w, h );
+
+	Target target;
+	if( !target.Create( w, h ) )
 	{
-		std::printf( "   FAIL  could not create an OpenGL 4.1 core context\n" );
-		return ++g_failures;
+		Check( false, "output framebuffer is complete" );
+		return g_failures;
 	}
-	std::printf( "\n  GL %s / %s\n", glGetString( GL_VERSION ), glGetString( GL_RENDERER ) );
-	renderAt( 1920, 1080 );
-	renderAt( 320, 180 );
-	CGLSetCurrentContext( nullptr );
-	CGLDestroyContext( context );
+
+	//Black to the left of 3/8 of the width, white from it. The readback's
+	//box filter puts that on picture pixel 120 exactly at any width that is
+	//a multiple of 8 -- 320, 1280, 1920 -- because its taps then fall on
+	//texel centres (it takes ceil( w/320 ) of them, capped at 8).
+	std::vector< unsigned char > card( static_cast< size_t >( w ) * h * 4, 0 );
+	const int edgeOut = w * 3 / 8;
+	for( int y = 0; y < h; ++y )
+		for( int x = 0; x < w; ++x )
+		{
+			const float v = x >= edgeOut ? 1.0f : 0.0f;
+			setPixel( card, w, h, x, y, v, v, v );
+		}
+	const GLuint input = makeInput( card, w, h );
+
+	for( double ppm : { 150.0, -150.0 } )
+	{
+		Instance i( w, h );
+		i.plugin.EngineForTest().Rx().DebugIgnoreClockError( ignoreClock );
+		i.set( Slowscan::SS_SPEED, 1.0f );//120x: a picture in 58 frames
+		i.set( Slowscan::SS_SNR, 1.0f );  //40 dB
+		i.set( Slowscan::SS_FADE_DEPTH, 0.0f );
+		i.set( Slowscan::SS_CURSOR, 0.0f );
+		i.set( Slowscan::SS_CLOCK_ERROR, static_cast< float >( 0.5 + ppm / ( 2.0 * controls::kPpmRange ) ) );
+		i.set( Slowscan::SS_SLANT_CORRECT, 0.5f );
+
+		//Run until the first picture is complete and the second has begun:
+		//the second is the same card through the same channel, so the rows
+		//it has overwritten carry the same edge.
+		Image img;
+		int f = 0;
+		for( ; f < 200; ++f )
+		{
+			img = render( i, target, input, w, h, f / 60.0 );
+			if( i.plugin.EngineForTest().Rx().PicturesStarted() >= 2 )
+				break;
+		}
+		const double effective = i.plugin.ResolvedForTest().clockErrorPpm;
+		const double expected  = predictedSlant( kMartinM1, effective );
+
+		Mapping map = mappingFor( i.plugin, w, h );
+		std::vector< double > xs, ys;
+		for( int oy = 0; oy < h; ++oy )
+		{
+			//The row's picture line, validated with the 1/16-pixel margin.
+			int px, py;
+			const int ox0 = static_cast< int >( map.rx + map.rw * 0.5f );
+			if( !map.toPicture( ox0, oy, px, py ) )
+				continue;
+			//The first rise through half-scale right of picture pixel 16,
+			//interpolated between the two output pixels either side.
+			const int from = static_cast< int >( std::ceil( map.rx + 16.0f * map.rw / map.pw ) );
+			const int to   = static_cast< int >( std::floor( map.rx + map.rw ) ) - 1;
+			for( int ox = from + 1; ox <= to; ++ox )
+			{
+				const double a = img.at( ox - 1, oy )[ 0 ] / 255.0;
+				const double b = img.at( ox, oy )[ 0 ] / 255.0;
+				if( a < 0.5 && b >= 0.5 )
+				{
+					const double xOut = ( ox - 1 ) + 0.5 + ( 0.5 - a ) / ( b - a );//output pixel coordinate
+					xs.push_back( py );
+					ys.push_back( ( xOut - map.rx ) * map.pw / map.rw );
+					break;
+				}
+			}
+		}
+
+		//Least squares of crossing on line index, with the lines as x.
+		double sx = 0, sy = 0, sxx = 0, sxy = 0;
+		const double n = static_cast< double >( xs.size() );
+		for( size_t k = 0; k < xs.size(); ++k )
+		{
+			sx += xs[ k ];
+			sy += ys[ k ];
+			sxx += xs[ k ] * xs[ k ];
+			sxy += xs[ k ] * ys[ k ];
+		}
+		const double d     = n * sxx - sx * sx;
+		const double slope = d != 0.0 ? ( n * sxy - sx * sy ) / d : 0.0;
+
+		//Per-row error: the crossing is found between two output pixels,
+		//which are pw/rw PICTURE pixels apart; each shows the
+		//picture pixel under its centre (texelFetch, nearest), which is one
+		//picture pixel of quantisation; and the decoder's own edge is placed
+		//to one transmitter sample, 1/pxS pixels. The worst least-squares
+		//slope error from per-row errors bounded by e is e sum|x - xbar| /
+		//sum( x - xbar )^2.
+		const double perRow = map.pw / map.rw + 1.0 + 1.0 / pixelSamples( kMartinM1 );
+		double mean = sx / std::max( n, 1.0 ), sumAbs = 0.0, sumSq = 0.0;
+		for( double x : xs )
+		{
+			sumAbs += std::fabs( x - mean );
+			sumSq += ( x - mean ) * ( x - mean );
+		}
+		const double tol = sumSq > 0.0 ? perRow * sumAbs / sumSq : 1e9;
+		Check( xs.size() >= 100 && std::fabs( slope - expected ) <= tol,
+		       F( effective, 1 ) + " ppm: " + std::to_string( xs.size() ) + " output rows lean " + F( slope, 5 ) + " picture px/line against e T_line/T_pixel = " + F( expected, 5 ) + " (tolerance " + F( tol, 5 ) + " = (" + F( map.pw / map.rw, 3 ) + " + 1 + 1/pxS) px a row, through 3/N)" );
+		Check( ( slope > 0.0 ) == ( expected > 0.0 ) && std::fabs( slope ) > tol,
+		       F( effective, 1 ) + " ppm: the lean is resolved at this raster (|" + F( slope, 5 ) + "| > " + F( tol, 5 ) + ") and has the sign of the error" );
+	}
+
+	glDeleteTextures( 1, &input );
+	target.Destroy();
+	return g_failures;
+}
+
+//---------------------------------------------------------------------------
+/// --negative: break the model, and every check above must notice.
+///
+/// Each case perturbs the MODEL -- the plugin or the engine, through a test
+/// hook that is off in the shipped build -- never the check's expectation,
+/// and runs the check unchanged. A case passes when the check fails; where
+/// the spec names the bound that must catch it, that bound must be among
+/// the failures.
+//---------------------------------------------------------------------------
+int runNegative( int w, int h, bool withGL )
+{
+	std::printf( "negative: each broken model must fail its check\n\n" );
+
+	struct Case
+	{
+		const char* what;
+		const char* must;//a substring of the check that must be among the failures, or nullptr
+		bool gl;
+		std::function< void() > run;
+	};
+	const Case cases[] = {
+		{ "timing: a line 50 ppm long", "line starts equal", false, [] { runTiming( 50.0 ); } },
+		{ "slant: the Clock Error term dropped", "px/line against", false, [] { runSlant( true ); } },
+		{ "levels: the phase reset at every pixel", "discriminator's error bound", false, [] { runLevels( true, false ); } },
+		{ "levels: no lowpass", "closed form", false, [] { runLevels( false, true ); } },
+		{ "threshold: the SNR stated in 1.5 kHz, not 3 (3 dB)", "linearised closed form", false, [] { runThreshold( 3.0 ); } },
+		{ "progressive: the signal run 1% fast", "rows replaced", false, [] { runProgressive( 0.01, false ); } },
+		{ "progressive: the fade rate multiplied by Speed", "Speed changes nothing per sample", false, [] { runProgressive( 0.0, true ); } },
+		{ "vis: the parity bit sent wrong", "decoded", false, [] { runVis( true ); } },
+		{ "sync: Line Sync switched off", "stays within", false, [] { runSync( false ); } },
+		{ "clock: frame durations taken in float", "running sample totals", false, [] { runClock( true ); } },
+		{ "render: the picture uploaded one row low", "byte for byte", true, [ w, h ] { runRender( w, h, 1 ); } },
+		{ "raster: the Clock Error term dropped", "picture px/line", true, [ w, h ] { runRaster( w, h, true ); } },
+	};
+
+	for( const Case& c : cases )
+	{
+		if( c.gl && !withGL )
+		{
+			std::printf( "   skip  %s: no GL context\n", c.what );
+			continue;
+		}
+		g_quiet                = true;
+		const int before       = g_failures;
+		const int checksBefore = g_checks;
+		const size_t logBefore = g_failedChecks.size();
+		c.run();
+		const int raised = g_failures - before;
+		const int ran    = g_checks - checksBefore;
+		bool named       = c.must == nullptr;
+		for( size_t k = logBefore; k < g_failedChecks.size(); ++k )
+			if( c.must != nullptr && g_failedChecks[ k ].find( c.must ) != std::string::npos )
+				named = true;
+		g_failedChecks.resize( logBefore );
+		g_quiet = false;
+		//The broken run's own failures are the point; they are not this
+		//run's failures.
+		g_failures = before;
+		g_checks   = checksBefore;
+		const bool ok = raised > 0 && named;
+		++g_checks;
+		if( !ok )
+			++g_failures;
+		std::printf( "   %s  %s: %d of %d checks failed%s\n", ok ? "ok  " : "FAIL", c.what, raised, ran,
+		             c.must == nullptr ? "" : ( named ? ( std::string( ", including '" ) + c.must + "'" ).c_str() : ( std::string( ", but NOT '" ) + c.must + "'" ).c_str() ) );
+	}
 	return g_failures;
 }
 
@@ -1756,7 +2237,8 @@ int runBench( int frames )
 		std::printf( "bench: could not create an OpenGL 4.1 core context\n" );
 		return 1;
 	}
-	std::printf( "bench: %s / %s\n\n", glGetString( GL_VERSION ), glGetString( GL_RENDERER ) );
+	std::printf( "bench: %s / %s\n", glGetString( GL_VERSION ), glGetString( GL_RENDERER ) );
+	std::printf( "  (best of three runs of %d frames after 60 of warm-up; glFinish both sides; engine included)\n\n", frames );
 	std::printf( "  %-12s %-8s %10s %10s\n", "size", "speed", "ms/frame", "% of 60fps" );
 
 	struct Run
@@ -1779,20 +2261,21 @@ int runBench( int frames )
 		const std::vector< unsigned char > picture = buildCard( r.w, r.h );
 		const GLuint input                         = makeInput( picture, r.w, r.h );
 
-		Instance i( r.w, r.h );
-		i.set( Slowscan::SS_SPEED, r.speed );
-
-		//glFinish on both sides, or this times how fast the driver accepts
-		//commands rather than how fast the GPU runs them. No readback.
-		for( int f = 0; f < 60; ++f )
-			renderOnly( i, target, input, r.w, r.h, f / 60.0 );
-		glFinish();
-		const auto start = std::chrono::steady_clock::now();
-		for( int f = 0; f < frames; ++f )
-			renderOnly( i, target, input, r.w, r.h, ( 60 + f ) / 60.0 );
-		glFinish();
-		const double ms = std::chrono::duration< double, std::milli >( std::chrono::steady_clock::now() - start ).count() / frames;
-		std::printf( "  %4dx%-7d %-8s %10s %9s%%\n", r.w, r.h, r.label, F( ms, 3 ).c_str(), F( ms / 16.667 * 100.0, 1 ).c_str() );
+		double best = 1e9;
+		for( int attempt = 0; attempt < 3; ++attempt )
+		{
+			Instance i( r.w, r.h );
+			i.set( Slowscan::SS_SPEED, r.speed );
+			for( int f = 0; f < 60; ++f )
+				renderOnly( i, target, input, r.w, r.h, f / 60.0 );
+			glFinish();
+			const auto start = std::chrono::steady_clock::now();
+			for( int f = 0; f < frames; ++f )
+				renderOnly( i, target, input, r.w, r.h, ( 60 + f ) / 60.0 );
+			glFinish();
+			best = std::min( best, std::chrono::duration< double, std::milli >( std::chrono::steady_clock::now() - start ).count() / frames );
+		}
+		std::printf( "  %4dx%-7d %-8s %10s %9s%%\n", r.w, r.h, r.label, F( best, 3 ).c_str(), F( best / 16.667 * 100.0, 1 ).c_str() );
 
 		glDeleteTextures( 1, &input );
 		target.Destroy();
@@ -1804,35 +2287,73 @@ int runBench( int frames )
 }
 
 //---------------------------------------------------------------------------
+// --list: what the sweep reads. An option's range is its element count, as
+// the addendum warns: the host reads an option's range back as 0..1.
+//---------------------------------------------------------------------------
+const char* kindName( Slowscan& plugin, unsigned int i )
+{
+	if( i >= Slowscan::SS_ABOUT_FIRST )
+		return "about";
+	switch( plugin.GetParamType( i ) )
+	{
+	case FF_TYPE_BOOLEAN: return "bool";
+	case FF_TYPE_EVENT: return "event";
+	case FF_TYPE_OPTION: return "option";
+	case FF_TYPE_INTEGER: return "integer";
+	case FF_TYPE_BUFFER: return "buffer";
+	case FF_TYPE_TEXT: return "text";
+	case FF_TYPE_STANDARD: return "standard";
+	default: return "other";
+	}
+}
+
+void listParameters()
+{
+	Slowscan plugin;
+	std::printf( "%3s  %-16s  %-9s  %-8s  %s\n", "id", "name", "kind", "default", "range" );
+	for( unsigned int i = 0; i < plugin.GetNumParams(); ++i )
+	{
+		float high = 1.0f;
+		if( plugin.GetParamType( i ) == FF_TYPE_OPTION )
+			high = static_cast< float >( std::max( 1u, plugin.GetNumParamElements( i ) ) - 1u );
+		const char* name = plugin.GetParamName( i );
+		std::printf( "%3u  %-16s  %-9s  %.4f    [%g..%g]\n", i, name ? name : "?", kindName( plugin, i ), plugin.GetFloatParameter( i ), 0.0, high );
+	}
+}
+
+//---------------------------------------------------------------------------
 void usage()
 {
 	std::printf(
 		"sstest -- render the slowscan chain, and check what it claims\n"
 		"\n"
 		"  --out PATH        write a PNG (default /tmp/slowscan.png)\n"
-		"  --size WxH        output size (default 1920x1080)\n"
+		"  --size WxH        output size (default 1280x720); every check takes it\n"
 		"  --frames N        frames to run before capturing (default 60)\n"
-		"  --set \"Name=V\"    set a parameter by its display name\n"
+		"  --set \"Name=V\"    set a parameter by its display name (0..1 for\n"
+		"                    sliders, the element index for options)\n"
 		"  --press \"Name@F\"  press an event parameter before frame F\n"
 		"  --audio L         feed a synthetic spectrum at level L (0..1)\n"
 		"  --motion          scroll the card every frame, so Live differs from Latch\n"
-		"  --list            print every parameter and its default, then exit\n"
+		"  --list            print every parameter, kind, default and range\n"
 		"\n"
-		"  checks that need no GL context at all:\n"
+		"  checks on the chain itself, no GL (raster-free: the decoder's picture\n"
+		"  is the mode's own 320xN whatever --size says):\n"
 		"  --timing          every line, segment and pixel boundary is its constant\n"
 		"  --slant           the lean is e * T_line / T_pixel, both signs, two modes\n"
 		"  --levels          flat fields exact, a ramp within a step, the edge's tau\n"
-		"  --threshold       pixel variance against SNR shows the FM knee\n"
-		"  --progressive     floor( t s / T_line ) lines replaced\n"
+		"  --threshold       pixel variance against SNR: closed form, then the knee\n"
+		"  --progressive     floor( t s / T_line ) lines replaced; Speed is inert per sample\n"
 		"  --vis             the header decodes to the mode it was sent in\n"
 		"  --sync            Line Sync holds the edge within a pixel\n"
 		"  --clock           a six-day host clock runs the same signal\n"
 		"  --names           nothing the host will silently truncate\n"
-		"  --negative        break the model and prove the checks fail\n"
 		"  --engine          the CPU cost of the chain\n"
 		"\n"
-		"  checks that render:\n"
-		"  --render          the frame against the decoder's picture, two rasters\n"
+		"  checks that render, at --size:\n"
+		"  --render          the frame against the decoder's picture, byte for byte\n"
+		"  --raster          the lean fitted in the rendered frame\n"
+		"  --negative        break the model and prove every check fails\n"
 		"  --bench           720p, 1080p and 4K\n" );
 }
 } // namespace
@@ -1840,9 +2361,9 @@ void usage()
 int main( int argc, char** argv )
 {
 	std::string outputPath = "/tmp/slowscan.png";
-	int width = 1920, height = 1080;
+	int width = 1280, height = 720;
 	int frames      = 60;
-	int benchFrames = 240;
+	int benchFrames = 120;
 	float audioLevel = -1.0f;
 	bool motion      = false;
 	std::vector< std::pair< std::string, float > > overrides;
@@ -1919,61 +2440,74 @@ int main( int argc, char** argv )
 		return 2;
 	}
 
-	//-----------------------------------------------------------------------
-	// The checks that need no context run FIRST and return before one is made.
-	//-----------------------------------------------------------------------
 	if( !modes.empty() )
 	{
-		bool ranSomething = false;
-		bool needGL       = false;
+		for( const std::string& mode : modes )
+			if( mode == "--list" )
+			{
+				listParameters();
+				return 0;
+			}
+			else if( mode == "--bench" )
+				return runBench( benchFrames );
+
+		//The checks on the chain need no context and run first.
+		bool needGL = false;
 		for( const std::string& mode : modes )
 		{
-			if( mode == "--timing" )           { runTiming( 0.0 ); ranSomething = true; }
-			else if( mode == "--slant" )       { runSlant( false ); ranSomething = true; }
-			else if( mode == "--levels" )      { runLevels( false, false ); ranSomething = true; }
-			else if( mode == "--threshold" )   { runThreshold(); ranSomething = true; }
-			else if( mode == "--progressive" ) { runProgressive(); ranSomething = true; }
-			else if( mode == "--vis" )         { runVis( false ); ranSomething = true; }
-			else if( mode == "--sync" )        { runSync( true ); ranSomething = true; }
-			else if( mode == "--clock" )       { runClock(); ranSomething = true; }
-			else if( mode == "--names" )       { runNames(); ranSomething = true; }
-			else if( mode == "--negative" )    { runNegative(); ranSomething = true; }
-			else if( mode == "--engine" )      { runEngineBench(); ranSomething = true; }
-			else if( mode == "--render" || mode == "--bench" || mode == "--list" )
+			const size_t before = static_cast< size_t >( g_checks );
+			if( mode == "--timing" )           runTiming( 0.0 );
+			else if( mode == "--slant" )       runSlant( false );
+			else if( mode == "--levels" )      runLevels( false, false );
+			else if( mode == "--threshold" )   runThreshold( 0.0 );
+			else if( mode == "--progressive" ) runProgressive( 0.0, false );
+			else if( mode == "--vis" )         runVis( false );
+			else if( mode == "--sync" )        runSync( true );
+			else if( mode == "--clock" )       runClock( false );
+			else if( mode == "--names" )       runNames();
+			else if( mode == "--engine" )      runEngineBench();
+			else if( mode == "--render" || mode == "--raster" || mode == "--negative" )
 				needGL = true;
 			else
 			{
 				std::fprintf( stderr, "sstest: unknown mode '%s'\n", mode.c_str() );
 				return 2;
 			}
-			if( ranSomething )
+			if( static_cast< size_t >( g_checks ) != before && mode != "--names" && mode != "--clock" )
+				std::printf( "   (raster-free: measured in the decoder's own %s picture; --size %dx%d does not enter)\n", "320xN", width, height );
+			if( !needGL )
 				std::printf( "\n" );
 		}
 
-		if( ranSomething && !needGL )
+		if( needGL )
 		{
-			std::printf( "%d checks, %d failed\n", g_checks, g_failures );
-			return g_failures == 0 ? 0 : 1;
-		}
-
-		for( const std::string& mode : modes )
-			if( mode == "--list" )
+			CGLContextObj context = createContext();
+			if( context == nullptr )
 			{
-				Slowscan plugin;
-				for( unsigned int p = 0; p < plugin.GetNumParams(); ++p )
-					std::printf( "%2u  %-20s %.3f\n", p, plugin.GetParamName( p ), plugin.GetFloatParameter( p ) );
-				return 0;
+				std::printf( "   FAIL  could not create an OpenGL 4.1 core context\n" );
+				++g_failures;
 			}
-
-		for( const std::string& mode : modes )
-		{
-			if( mode == "--render" )
-				runRender();
-			else if( mode == "--bench" )
-				return runBench( benchFrames );
+			else
+			{
+				std::printf( "GL %s / %s\n\n", glGetString( GL_VERSION ), glGetString( GL_RENDERER ) );
+				for( const std::string& mode : modes )
+				{
+					if( mode == "--render" )
+						runRender( width, height, 0 );
+					else if( mode == "--raster" )
+						runRaster( width, height, false );
+					else if( mode == "--negative" )
+						runNegative( width, height, true );
+					else
+						continue;
+					std::printf( "\n" );
+				}
+				CGLSetCurrentContext( nullptr );
+				CGLDestroyContext( context );
+			}
 		}
 
-		std::printf( "\n%d checks, %d failed\n", g_checks, g_failures );
+		std::printf( "%d checks, %d failed\n", g_checks, g_failures );
 		return g_failures == 0 ? 0 : 1;
 	}
 

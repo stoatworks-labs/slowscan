@@ -283,7 +283,12 @@ double Slowscan::frameSecondsFor( double seconds )
 	//float resolves only ~0.03 s and a 1/60 s frame would read as 0 or 0.03.
 	double frameSeconds = kFirstFrameSeconds;
 	if( lastSeconds >= 0.0 )
-		frameSeconds = std::clamp( seconds - lastSeconds, kMinFrameSeconds, kMaxFrameSeconds );
+	{
+		const double delta = debugFloatClock
+		                         ? static_cast< double >( static_cast< float >( seconds ) - static_cast< float >( lastSeconds ) )
+		                         : seconds - lastSeconds;
+		frameSeconds = std::clamp( delta, kMinFrameSeconds, kMaxFrameSeconds );
+	}
 	lastSeconds = seconds;
 	return frameSeconds;
 }
@@ -548,6 +553,12 @@ FFResult Slowscan::ProcessOpenGL( ProcessOpenGLStruct* pGL )
 	if( !ensurePictureTexture( engine.Rx().Width(), engine.Rx().Height() ) )
 		return FF_FAIL;
 	engine.Rx().Composite( pictureRgb );
+	if( debugRowOffset != 0 && pictureHeight > 0 )
+	{
+		const size_t row = static_cast< size_t >( pictureWidth ) * 3;
+		const int shift  = ( ( debugRowOffset % pictureHeight ) + pictureHeight ) % pictureHeight;
+		std::rotate( pictureRgb.begin(), pictureRgb.end() - static_cast< std::ptrdiff_t >( shift * row ), pictureRgb.end() );
+	}
 	glBindTexture( GL_TEXTURE_2D, pictureTexture );
 	glPixelStorei( GL_UNPACK_ALIGNMENT, 1 );
 	glTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0, pictureWidth, pictureHeight, GL_RGB, GL_UNSIGNED_BYTE, pictureRgb.data() );
@@ -582,6 +593,7 @@ FFResult Slowscan::ProcessOpenGL( ProcessOpenGLStruct* pGL )
 		composeShader.Set( "RectSize", rw / outputW, rh / outputH );
 		glUniform2i( glGetUniformLocation( composeShader.GetGLID(), "PictureSize" ), pictureWidth, pictureHeight );
 		composeShader.Set( "CursorRow", CursorRowForTest() );
+		composeShader.Set( "RowsPerPixel", static_cast< float >( pictureHeight ) / std::max( rh, 1.0f ) );
 		composeShader.Set( "CursorColour", kCursorR, kCursorG, kCursorB );
 		composeShader.Set( "Mix", std::clamp( params[ SS_MIX ], 0.0f, 1.0f ) );
 

@@ -18,10 +18,14 @@ namespace slowscan::sstv
 	              fading, so the two interfere -- which is what makes HF
 	              frequency-selective rather than merely dim.
 	  QRM         an interfering carrier at a set frequency and level.
-	  audio       the host's 64 FFT bins, each one a tone at the frequency the
-	              Bin Spacing assumption assigns it. Resolume gives a spectrum
-	              and not a waveform, and nobody has measured how those bins
-	              are laid out; see AGENTS.md.
+	  audio       the host's 64 FFT bins as NOISE whose spectrum they shape.
+	              Resolume gives a spectrum and not a waveform, so there is no
+	              waveform to put on the air; what can be put there honestly
+	              is Gaussian noise through a filter whose magnitude response
+	              is the bins, at the frequencies the Bin Spacing assumption
+	              gives them. Nobody has measured how those bins are laid out;
+	              see AGENTS.md. Anything the bins put above the channel's
+	              Nyquist is outside the channel and is dropped, not aliased.
 	  noise       white Gaussian, at the SNR stated in a 3 kHz bandwidth, added
 	              to the real output because that is the only part a receiver
 	              can hear.
@@ -46,6 +50,10 @@ public:
 		int binSpacing         = 1;///< 0 linear to Nyquist, 1 logarithmic 20 Hz..20 kHz
 	};
 
+	/// The noise standard deviation, per real sample, that puts `snrDb` of
+	/// signal-to-noise in a 3 kHz bandwidth against a unit-amplitude tone.
+	static double NoiseSigma( double snrDb );
+
 	/// The Clarke model's ray count. Eight is the smallest number that gives
 	/// an envelope whose distribution is close to Rayleigh; Jakes used it.
 	static constexpr int kRays = 8;
@@ -58,9 +66,19 @@ public:
 	Channel();
 
 	void SetParams( const Params& p );
-	/// The host's bins. Ramped to the new values over `rampSamples` so a
-	/// frame-rate update is a slope, not a click.
-	void SetAudioBins( const float* bins, int count, int rampSamples );
+	/// The host's bins, read as MAGNITUDES. The interference filter is
+	/// redesigned from them; the noise running through it carries on.
+	void SetAudioBins( const float* bins, int count );
+
+	/// The interference filter's taps, for the harness.
+	static constexpr int kAudioTaps = 64;
+	const double* AudioTaps() const { return audioTaps; }
+	/// The frequency range, in Hz, bin `i` covers under a spacing.
+	static void BinRangeHz( int spacing, int i, double& lowHz, double& highHz );
+
+	/// Negative control: state the SNR 3 dB wrong -- in the 1.5 kHz the
+	/// receiver's filter passes rather than in 3 kHz. `--threshold` must see it.
+	void DebugSnrOffsetDb( double db ) { debugSnrOffsetDb = db; SetParams( params ); }
 	void Reset();
 
 	/// One sample: the transmitter's analytic tone in, the real audio out.
@@ -89,8 +107,6 @@ private:
 	struct Fader
 	{
 		Phasor rays[ kRays ];
-		double phaseRe[ kRays ] = {};
-		double phaseIm[ kRays ] = {};
 		void Seed( Rng& rng, double dopplerHz );
 		void SetDoppler( double dopplerHz );
 		void Gain( double& re, double& im ) const;
@@ -112,12 +128,17 @@ private:
 	int delayWrite  = 0;
 	int delaySamples = 0;
 
-	Phasor audio[ kBins ];
-	double audioAmp[ kBins ]    = {};
-	double audioTarget[ kBins ] = {};
-	double audioSlope[ kBins ]  = {};
-	int audioRamp               = 0;
-	bool audioActive[ kBins ]   = {};
+	//The interference: white Gaussian noise through a 64-tap linear-phase
+	//FIR whose response is the bins. One Gaussian and 64 multiply-adds a
+	//sample, whatever the bins hold.
+	float bins[ kBins ]            = {};
+	double audioTaps[ kAudioTaps ] = {};
+	double audioNoise[ kAudioTaps ] = {};
+	int audioWrite                 = 0;
+	bool audioActive               = false;
+	Rng audioRng;
+	void designAudioFilter();
+	double debugSnrOffsetDb = 0.0;
 
 	double noiseSigma    = 0.0;
 	int sinceRenormalise = 0;

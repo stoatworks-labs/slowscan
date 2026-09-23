@@ -19,9 +19,9 @@ namespace slowscan
     `depthBufferID` a second time where it plainly meant `colorTextureID` --
     so the colour texture is leaked on every release (SDK b1afaf9,
     `FFGLFBO.cpp`). One leak would not matter; this plugin drops and rebuilds
-    every buffer whenever the system or the composition size changes, and
-    somebody auditioning NTSC against PAL a few times should not be paying
-    megabytes of texture memory for each comparison.
+    its readback buffer whenever the mode changes size -- Auto VIS does that
+    every third picture, from 320x256 to Robot 36's 320x240 and back -- and a
+    show running for hours should not leak a texture per picture.
 */
 class PassBuffer : public ffglex::FFGLFBO
 {

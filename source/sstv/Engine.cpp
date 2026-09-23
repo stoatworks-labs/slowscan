@@ -17,7 +17,10 @@ void Engine::SetParams( const EngineParams& p )
 	params = p;
 	tx.SetMode( params.mode );
 	tx.SetLive( params.live );
-	ch.SetParams( params.channel );
+	Channel::Params c = params.channel;
+	if( debugFadeTimesSpeed )
+		c.fadeRateHz *= params.speed;
+	ch.SetParams( c );
 
 	Receiver::Params r;
 	r.bandwidthHz   = params.rxBandwidthHz;
@@ -29,11 +32,7 @@ void Engine::SetParams( const EngineParams& p )
 
 void Engine::SetAudioBins( const float* bins, int count )
 {
-	//Ramped over about a frame's worth of samples at the current speed, so a
-	//60 fps update is a slope rather than a step. The next Run() block is
-	//about that long; a shorter block just finishes the ramp early.
-	const int ramp = std::max( 1, static_cast< int >( params.speed * kSampleRateHz / 60.0 ) );
-	ch.SetAudioBins( bins, count, ramp );
+	ch.SetAudioBins( bins, count );
 }
 
 void Engine::SetSource( const uint8_t* rgba, int width, int height )
@@ -51,7 +50,7 @@ void Engine::Restart()
 
 int Engine::SamplesForFrame( double frameSeconds )
 {
-	const double wanted = frameSeconds * params.speed * kSampleRateHz + carry;
+	const double wanted = frameSeconds * params.speed * ( 1.0 + debugSpeedError ) * kSampleRateHz + carry;
 	const int whole     = static_cast< int >( std::floor( wanted ) );
 	carry               = wanted - whole;
 	return std::clamp( whole, 0, kMaxBlock );

@@ -140,6 +140,13 @@ public:
 	/// The normalised clock, as ProcessOpenGL reads it after SetTime.
 	double ElapsedSecondsForTest() { return elapsedSeconds(); }
 
+	/// Negative control: take the frame's duration as a difference of two
+	/// FLOAT clock readings, the trap. `--clock` must see it.
+	void DebugFloatClock( bool on ) { debugFloatClock = on; }
+	/// Negative control: upload the picture shifted down by this many rows.
+	/// `--render` must see the frame disagree with the decoder.
+	void DebugUploadRowOffset( int rows ) { debugRowOffset = rows; }
+
 private:
 	bool compileShaders();
 	double frameSecondsFor( double seconds );
@@ -182,6 +189,9 @@ private:
 	std::chrono::steady_clock::time_point startTime;
 
 	float params[ SS_COUNT ] = {};
+
+	bool debugFloatClock = false;
+	int debugRowOffset   = 0;
 
 	/// GetTextParameter hands the host a bare pointer, so the string has to
 	/// outlive the call.
