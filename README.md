@@ -34,6 +34,38 @@ its whole signal chain: the station, the HF channel and the decoder. It is a por
 and not the plugin, and it has no audio input: read what
 [the page itself says it does not reproduce](https://slowscan-demo.stoatworks-labs.com).
 
+<!-- downloads:start -->
+
+## Download
+
+**[v0.1.0](https://github.com/stoatworks-labs/slowscan/releases/tag/v0.1.0)** — prebuilt for macOS and Windows. Pick your platform:
+
+<details>
+<summary><b>macOS</b> — Universal (Apple Silicon + Intel)</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| Universal (Apple Silicon + Intel) · .dmg disk image | [`slowscan-0.1.0-macos-universal.dmg`](https://github.com/stoatworks-labs/slowscan/releases/download/v0.1.0/slowscan-0.1.0-macos-universal.dmg) | 236 KB |
+| Universal (Apple Silicon + Intel) · .zip archive | [`slowscan-macos-universal.zip`](https://github.com/stoatworks-labs/slowscan/releases/latest/download/slowscan-macos-universal.zip) | 198 KB |
+
+</details>
+
+<details>
+<summary><b>Windows</b> — x64</summary>
+
+| Build | Download | Size |
+| --- | --- | --- |
+| x64 · .exe installer | [`slowscan-0.1.0-windows-x86_64-setup.exe`](https://github.com/stoatworks-labs/slowscan/releases/download/v0.1.0/slowscan-0.1.0-windows-x86_64-setup.exe) | 230 KB |
+| x64 · .zip archive | [`slowscan-windows-x86_64.zip`](https://github.com/stoatworks-labs/slowscan/releases/latest/download/slowscan-windows-x86_64.zip) | 123 KB |
+
+</details>
+
+All builds, checksums and release notes: [github.com/stoatworks-labs/slowscan/releases](https://github.com/stoatworks-labs/slowscan/releases).
+
+macOS builds are signed and notarised and open normally. The Windows builds are unsigned, so SmartScreen warns once.
+
+<!-- downloads:end -->
+
 ## The one idea
 
 Slow-scan television sends a still picture down a voice radio channel as audio. Each
