@@ -12,9 +12,11 @@
 > rate puts it. The VIS header decodes back to the mode it was sent in, Line Sync
 > takes a 75-pixel slant down to a quarter of a pixel, and Speed changes nothing
 > per sample, bit for bit. Fourteen negative controls prove the checks can fail. It
-> has **never been loaded into Resolume**. It is loaded by
+> has **never been loaded into Resolume on macOS**, where it is loaded by
 > [oxbow](https://github.com/stoatworks-labs/oxbow), which is a real FFGL host and
-> is not Resolume. See [Status](#status).
+> is not Resolume. On Windows, a build of v0.1.0 loads, registers and renders in
+> Resolume Arena 7.27.1 with every control as declared, on software rendering. See
+> [Status](#status).
 
 Slow-scan television over HF, as an FFGL effect for [Resolume](https://resolume.com)
 Arena and Avenue.
@@ -142,19 +144,29 @@ a second at the defaults, 6 million with everything on (multipath, QRM, audio). 
 120x that is 2.0 ms and 3.7 ms of CPU a frame, on the host's render thread.
 macOS figures only.
 
+### In Resolume, on Windows
+
+**Resolume Arena 7.27.1** (win-lab, Mesa llvmpipe, no GPU, 2026-09-24): a CI build of
+v0.1.0 loads from Extra Effects, registers as `SW Slowscan` / `SS01` / effect, all 27
+host controls match the declaration in name, order, type, range and default, it
+renders, and Arena's log stays clean: 9 of 9 of the fleet gate's checks. 18 controls
+moved the picture, 4 of them under a precondition. The three audio-driven controls,
+Audio, Audio QRM and Bin Spacing, could not be tested, because win-lab has no sound
+device. Software rendering says nothing about a GPU or about speed.
+
 ### Not established
 
-It has **never been loaded into Resolume**, on either platform. Everything above was
-compiled, rendered and measured offline against the real plugin class in a headless
-CGL context, plus an `oxbow` load. Still untested:
+It has **never been loaded into Resolume on macOS**. Everything above the Windows
+section was compiled, rendered and measured offline against the real plugin class in
+a headless CGL context, plus an `oxbow` load. Still untested:
 
 - how 21 parameters in four groups, one of them the audio input, present in
-  Arena's inspector;
+  Arena's inspector on a Mac;
 - whether Resolume's FFT bins are laid out as either `Bin Spacing` assumes;
 - whether 3.7 ms of CPU a frame at 120x is comfortable on a busy show machine;
 - what the host's real clock does over a long session.
 
-The Windows build is CI-only and has never run. Nothing has been through a show.
+Nothing has been through a show.
 There is no OpenFX port; it was not in scope for 0.1.0. The browser demo, linked at
 the top, runs the plugin's shaders over a hand port of its signal chain, and
 nothing checks a port but a reader.

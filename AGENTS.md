@@ -10,7 +10,7 @@ tell anybody this works.
 
 Slow-scan television over HF, as an FFGL 2.1 effect (`SS01`, shown as `SW Slowscan`)
 for Resolume Arena and Avenue. C++17 + GLSL 4.10, CMake, universal macOS `.bundle`
-and a Windows `.dll`. MIT, intended home `github.com/stoatworks-labs/slowscan`.
+and a Windows `.dll`. MIT, public at `github.com/stoatworks-labs/slowscan`.
 
 Built 2026-09-23. A first session wrote the scaffolding, the chain and the harness,
 and was cut off before `verify.sh` had ever run (commit `a488654`). A second session
@@ -463,10 +463,17 @@ Release build, at 320×180 and 1280×720.
 
 ### Assumed, or not done
 
-- ☠️ **Never loaded into Resolume**, on either platform. The inspector presentation,
-  the audio input's routing, the host's clock and its FFT bins are all untested.
+- ☠️ **Never loaded into Resolume on macOS.** On Windows, v0.1.0's CI build passed
+  the fleet Arena gate 9 of 9 in Arena 7.27.1 on llvmpipe (2026-09-24): it loads,
+  registers as `SW Slowscan` / `SS01` / effect, all 27 host controls match the
+  declaration, it renders and the log is clean. 18 controls moved the picture (4 under
+  a precondition); Audio, Audio QRM and Bin Spacing were not testable, because win-lab
+  has no sound device. On macOS the inspector presentation is untested, and on either
+  platform the audio input's routing, the host's clock and its FFT bins are.
 - **Resolume's 64 bins are unmeasured**, as fleet-wide. `Bin Spacing` is the hedge.
-- **The Windows build is CI-only**, and CI cannot run yet.
+- **Windows has only met a software renderer.** CI builds it on GitHub, and Arena on
+  win-lab's llvmpipe is the one host it has run in; that says nothing about a GPU or
+  about speed.
 - **3.7 ms of CPU a frame at 120x with everything on** may be too much on a loaded
   show machine. The engine is single-threaded on the render thread.
 - **Barber's document was not re-read** by the session that finished this; the

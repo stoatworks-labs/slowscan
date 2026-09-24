@@ -82,8 +82,10 @@ timing, or any check's tolerance.
 - FFGL id is `SS01`, display name `SW Slowscan`.
 
 ## Not done yet
-- **Never loaded into Resolume.** Everything numeric is measured offline on macOS,
-  plus an `oxbow` load. The Windows build is CI-only and has never run.
+- **Never loaded into Resolume on macOS.** Everything numeric is measured offline on
+  macOS, plus an `oxbow` load. The Windows CI build of v0.1.0 passed the Arena gate
+  9 of 9 on win-lab (Arena 7.27.1, llvmpipe) on 2026-09-24; Audio, Audio QRM and Bin
+  Spacing went untested there, because win-lab has no sound device.
 - **The browser demo's signal chain is a port and nothing checks it.**
   `demo/sstv.js` re-implements `source/sstv/`, and `demo/plugin.js` re-implements
   `Controls.h` and `resolve()`. `check_shaders.py` covers the GLSL only. Change any of

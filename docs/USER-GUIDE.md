@@ -24,8 +24,9 @@ picture it is overwriting (below it).*
 > at **3.70 dB** SNR against Rice's **3.11 dB**. Line Sync takes a 75-pixel slant down to
 > **0.24 px**. Speed changes nothing per sample, bit for bit. Fourteen deliberately broken
 > models all fail the checks, and all 20 controls the harness can sweep change the picture.
-> It has **never been loaded into Resolume**. The one host it has run in is the fleet's own
-> test host, `oxbow`, for 120 frames.
+> It has **never been loaded into Resolume on macOS**. The one host it has run in there is the
+> fleet's own test host, `oxbow`, for 120 frames.
+> On Windows, a build of v0.1.0 loads, registers and renders in Resolume Arena 7.27.1, with every control matching what the plugin declares — on software rendering, so that says nothing about a GPU. The three controls that follow the music, Audio, Audio QRM and Bin Spacing, could not be tried there, because the test machine has no sound device.
 > Try it on a spare layer before you put it in a show.
 >
 > This codebase was created with AI assistance, directed and reviewed by a human author.
@@ -383,8 +384,9 @@ clock is in.
 
 ## Known limits
 
-- **Never loaded into Resolume**, on either platform, and nothing has driven the controls in a
-  host. How 21 controls in four groups read in the inspector, how Resolume routes audio into the
+- **Never loaded into Resolume on macOS**, and nothing has driven the controls in a show. On
+  Windows it loads and renders in Arena, on software rendering, with every control as declared.
+  How 21 controls in four groups read in the inspector on a Mac, how Resolume routes audio into the
   Audio input, the layout of its 64 bins, and what its clock does over a long session are all
   untested.
 - **The audio is noise shaped by the spectrum**, not the music itself, because a spectrum is all
@@ -399,7 +401,7 @@ clock is in.
 - **Three modes.** No Martin M2, Scottie S2/DX, Robot 72 or PD modes.
 - **Up to 3.7 ms of CPU a frame** at 120x with everything on, on Resolume's render thread. On a
   busy show machine that may be too much; lower Speed.
-- **No presets**, no OpenFX version and no browser demo.
+- **No presets** and no OpenFX version.
 
 ---
 
