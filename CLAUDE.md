@@ -96,8 +96,9 @@ timing, or any check's tolerance.
 ## Browser demo
 
 `demo/` is the page at **slowscan-demo.stoatworks-labs.com**, deployed from
-`wrangler.toml` in this repo with `cf-run npx wrangler deploy` from the repo root —
-no build step; what is committed is what is served. `demo/vendor/` is the shared kit,
+`wrangler.toml` in this repo: a push to main ships it (`.github/workflows/deploy.yml`,
+which checks the live `<head>` is the build), or by hand `cf-run npx wrangler deploy`
+from the repo root — no build step; what is committed is what is served. `demo/vendor/` is the shared kit,
 copied in from `~/Projects/infrastructure/stoatworks-backend/resolume-demo/` (re-sync
 with its `sync.sh slowscan`) and is not a place to edit.
 
