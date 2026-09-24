@@ -528,6 +528,7 @@ const demo = mountDemo({
   tagline:
     'Slow-scan television over HF. The clip is sent as audio tones — 1500 Hz black to 2300 Hz white, a line at a time with a 1200 Hz sync between lines — down a fading, echoing, hissing channel into an FM discriminator that paints each line as it arrives. Slant from a sound card a few ppm off, the new picture over the old from the top, noise streaks below the FM threshold, fades across bands of lines, a carrier pulling the picture into stripes: none of it is drawn, all of it falls out of the chain. The two shaders are the plugin’s own; the signal chain is a port of its C++.',
   repo: 'https://github.com/stoatworks-labs/slowscan',
+  page: 'https://stoatworks-labs.com/software/slowscan/',
 
   blurb:
     'It is Slowscan’s own GLSL, ported from the repository to WebGL2, around a JavaScript port of its C++ signal chain — the station, the HF channel and the decoder, run in this page at 11,025 samples a second times Speed on generated clips. Nothing checks that port but a reader.',
