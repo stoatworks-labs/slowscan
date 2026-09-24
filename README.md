@@ -126,6 +126,13 @@ decode, the receiver starts the picture from the station's own clock two lines i
 as an operator would press Start. It does not search for the picture's start by
 correlation.
 
+[![Slowscan — slow-scan television over HF, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=LmPvFRQsDWI)
+
+*[Watch it](https://www.youtube.com/watch?v=LmPvFRQsDWI) — 63 seconds: pictures arriving line by line under the cursor, SNR falling through the FM threshold into streaks, a fade taking the SNR with it, a multipath echo on every edge, a 250 ppm clock leaning the picture and Slant Correct taking it off, a QRM carrier tuned across the picture's tones, the audio going on air, and a switch to Robot 36. Every frame is the real plugin's output: an FFGL plugin has no window,
+so the footage is rendered by this repository's own offline harness
+(`sstest --pipe`, driven by a cue sheet) rather than filmed off a screen, and
+the clips are Resolume's bundled demo media.*
+
 ## Controls
 
 | Group | |
