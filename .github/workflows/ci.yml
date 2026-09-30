@@ -15,7 +15,7 @@ jobs:
     name: macOS
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The FFGL SDK is a submodule. Without this CMake fails at configure
           # time with a missing-directory error that reads like a broken repo.
@@ -83,7 +83,7 @@ jobs:
     name: Windows
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
