@@ -81,7 +81,8 @@ Do not edit the GLSL in `plugin.js` to make something compile in WebGL2.
 
 ## Deploying
 
-From the **repository root**, not from here:
+A push to main ships it: `.github/workflows/deploy.yml` deploys and then checks the live
+`<head>` is this build's. By hand, from the **repository root**, not from here:
 
 ```bash
 cf-run npx wrangler deploy
