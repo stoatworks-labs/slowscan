@@ -1,20 +1,22 @@
 # Slowscan user guide
 
-Slowscan is **slow-scan television over HF, for [Resolume](https://resolume.com) Arena and
-Avenue**, as an FFGL effect. It does not paint scan lines, noise or a slant onto a clip. It sends
-the clip as a slow-scan television station would, as audio tones a line at a time, down a
-simulated shortwave path with noise, fading, an echo and interference on it, into a receiver
-that decodes the tones back into a picture. The picture arriving from the top, the noise, the
-lean and the stripes are all what that radio chain does. None of them is drawn.
+Slowscan is an FFGL effect for [Resolume](https://resolume.com) Arena and Avenue that sends your
+clip as slow-scan television over a simulated shortwave path, and shows you what the receiver at
+the other end decodes.
+
+None of it is painted on. The clip goes out the way an SSTV station would send it, as audio tones
+a line at a time, down an HF path with noise, fading, an echo and interference on it, into a
+receiver that decodes the tones back into a picture. The picture arriving from the top, the noise,
+the lean and the stripes are all what that radio chain does to it.
 
 ![A test card received over a fading HF path: the new picture overwriting the old from the top with a green cursor on the arriving line, a slant from a receiver clock 60 ppm off, noise streaks, and a colour fringe down the left edge where the slant has pulled the end of one scan into the start of the next](hero.png)
 
 *The harness's test card through the plugin, rendered by the offline harness rather than
 captured from Resolume. Martin M1 at 40x through a 15 dB channel with deep fading and a receiver
-clock 60 ppm fast. The card scrolls, so the picture arriving (above the cursor) is not the
-picture it is overwriting (below it).*
+clock 60 ppm fast. The card scrolls, so the picture arriving (above the cursor) isn't the
+picture it's overwriting (below it).*
 
-> **Before you rely on this:** released at **v0.1.0**, and honestly early. The radio is
+> **Before you rely on this:** it's **v0.1.0**, and still early days. The radio is
 > measured rather than asserted, by a harness that drives the real plugin class and the signal
 > chain it owns. Every line, segment and pixel boundary of Martin M1, Scottie S1 and Robot 36
 > lands on its constant to the sample over a whole picture. A receiver clock error leans a
@@ -22,11 +24,11 @@ picture it is overwriting (below it).*
 > decoder's picture and again in the rendered frame at two rasters. Above the FM threshold the
 > pixel noise is within **2%** of the discriminator's closed form, and the threshold is measured
 > at **3.70 dB** SNR against Rice's **3.11 dB**. Line Sync takes a 75-pixel slant down to
-> **0.24 px**. Speed changes nothing per sample, bit for bit. Fourteen deliberately broken
-> models all fail the checks, and all 20 controls the harness can sweep change the picture.
-> It has **never been loaded into Resolume on macOS**. The one host it has run in there is the
+> **0.24 px**. Speed changes nothing per sample, bit for bit. Fourteen models, broken on
+> purpose, all fail the checks, and all 20 controls the harness can sweep change the picture.
+> It's **never been loaded into Resolume on macOS**. The one host it's run in there is the
 > fleet's own test host, `oxbow`, for 120 frames.
-> On Windows, a build of v0.1.0 loads, registers and renders in Resolume Arena 7.27.1, with every control matching what the plugin declares — on software rendering, so that says nothing about a GPU. The three controls that follow the music, Audio, Audio QRM and Bin Spacing, could not be tried there, because the test machine has no sound device.
+> On Windows, a build of v0.1.0 loads, registers and renders in Resolume Arena 7.27.1, with every control matching what the plugin declares, but on software rendering, so that says nothing about a GPU. The three controls that follow the music, Audio, Audio QRM and Bin Spacing, couldn't be tried there, because the test machine has no sound device.
 > Try it on a spare layer before you put it in a show.
 >
 > This codebase was created with AI assistance, directed and reviewed by a human author.
@@ -35,7 +37,7 @@ picture it is overwriting (below it).*
 
 ## Installing
 
-Every download carries one effect, **SW Slowscan**. Drop it into Resolume's effects folder and
+Each download has one effect in it, **SW Slowscan**. Drop it into Resolume's effects folder and
 restart Resolume:
 
 ```
@@ -43,12 +45,12 @@ macOS    ~/Documents/Resolume Arena/Extra Effects/
 Windows  %USERPROFILE%\Documents\Resolume Arena\Extra Effects\
 ```
 
-Avenue uses the same layout under its own folder name. The effect then appears in the effects
+Avenue uses the same layout under its own folder name. The effect then shows up in the effects
 browser as **SW Slowscan**.
 
-The macOS download is a universal build (Apple silicon and Intel), as a `.dmg` or a `.zip`. It is
-**Developer ID-signed and notarised**, so the bundle simply loads. The
-Windows download is an x64 installer or a `.zip`. It is not code-signed, so the installer trips
+The macOS download is a universal build (Apple silicon and Intel), as a `.dmg` or a `.zip`. It's
+**Developer ID-signed and notarised**, so the bundle just loads. The
+Windows download is an x64 installer or a `.zip`. It isn't code-signed, so the installer trips
 SmartScreen once: **More info** → **Run anyway**.
 
 ---
@@ -75,7 +77,7 @@ So the controls come in the same order. **Mode** is what the station sends and h
 **Channel** is the path between the station and the receiver. **Receiver** is the decoder at the
 far end. **Display** is how the decoded picture is put on your layer.
 
-What comes out is the receiver's picture, not your clip with something laid over it.
+What you see is whatever the receiver managed to make of your clip.
 
 ---
 
@@ -100,31 +102,31 @@ Then, in this order:
    changes them.
 
 **Be honest about the input.** With Transmit on **Latch**, the default, each picture is the
-frame your clip showed when that picture started. A clip that does not change sends the same
+frame your clip showed when that picture started. A clip that doesn't change sends the same
 picture again and again, and a new picture painting over an identical old one is invisible
-except for the cursor. Something that moves or cuts shows the arrival best.
+apart from the cursor. Something that moves or cuts shows off the arrival best.
 
 ---
 
 ## Time comes from the host
 
 The signal runs on the host's clock. Each frame is worth its own duration in signal, times
-**Speed**, at 11,025 samples a second. A re-render of the same composition therefore sends the
+**Speed**, at 11,025 samples a second. So a re-render of the same composition sends the
 same signal.
 
 Two things keep that clock from misbehaving:
 
 - **Each frame's duration is clamped between 1/240 and 1/24 of a second.** A stall, a scrub or
   a dropped frame never asks the radio for more than 1/24 s of signal at once. And a clock that
-  does not move still advances 1/240 s a frame: if the host keeps drawing while its clock is
-  stopped, the transmission slows to a quarter of its speed at 60 fps, but does not freeze.
+  doesn't move still advances 1/240 s a frame: if the host keeps drawing while its clock is
+  stopped, the transmission slows to a quarter of its speed at 60 fps, but doesn't freeze.
 - **For the first few frames after it loads**, the effect runs on its own steady clock while it
   works out whether the host counts time in seconds or milliseconds. Then it switches to the
   host's.
 
 Everything in the channel is defined **per second of signal, not of video**. So at 40x a
-0.3 Hz fade happens forty times as fast on screen. That is correct (the whole signal is sped
-up) and it is why the fades get busier as Speed goes up.
+0.3 Hz fade happens forty times as fast on screen. That's correct (the whole signal is sped
+up), and it's why the fades get busier as Speed goes up.
 
 ---
 
@@ -175,15 +177,15 @@ from grainy to broken up over a few dB. Below the threshold the header usually f
 too; see *Restart* for what the receiver does then.
 
 **Fade Depth**: how much of the path is fading, **0 to 1**, default 0.25. At 0 the path is a wire.
-At 1 it is pure Rayleigh scatter, the deep fades of a real HF path; between, a steady part and a
-fading part. **FM does not dim in a fade**: the discriminator reads frequency, not strength, so a
-fade does not darken the picture. It takes the SNR down with it, so each fade is a band of noisy
+At 1 it's pure Rayleigh scatter, the deep fades of a real HF path; between, a steady part and a
+fading part. **FM doesn't dim in a fade**: the discriminator reads frequency, not strength, so a
+fade doesn't darken the picture. It takes the SNR down with it, so each fade is a band of noisy
 lines, deep enough to break up when the SNR is already low. At 10 dB and Fade Depth 1, as in the
-video, each fade is a distinct band of broken-up lines across a picture that is otherwise clean.
+video, each fade is a distinct band of broken-up lines across a picture that's otherwise clean.
 
 **Fade Rate**: how fast the path fades, a Doppler spread of **0.02 Hz to 5 Hz**. The travel is
 geometric: 0.32 Hz in the middle, which is the default. Real HF is usually 0.1 to 1 Hz. The faster,
-the more and narrower the bands. It is per second of signal, so Speed multiplies it on screen: at
+the more and narrower the bands. It's per second of signal, so Speed multiplies it on screen: at
 40x the default makes busy, narrow bands, and 0.06 Hz, about a fifth of the way, gives about half
 a dozen a picture.
 
@@ -191,7 +193,7 @@ a dozen a picture.
 pixel is 0.4576 ms, so 8 ms is about 17 pixels (18 in Scottie, 29 in Robot 36).
 
 **Multipath Level**: the second path's strength against the first, **0 to 1**, default **0**. So at
-the defaults there is no second path at all, and Multipath does nothing until this is up. The
+the defaults there's no second path at all, and Multipath does nothing until this is up. The
 second path fades on its own, by the same Fade Depth. Every edge gets a coloured echo the delay
 to its right. The echo of the gap before each scan does the same: the first few pixels of every
 line are disturbed, and a thin bright line runs down the picture the delay in from its left edge.
@@ -201,20 +203,20 @@ line are disturbed, and a thin bright line runs down the picture the delay in fr
 The receiver's filter passes 1000 to 2500 Hz, so a carrier well outside that is mostly filtered
 out.
 
-**QRM Level**: the carrier's strength, **0 to 1**, default 0. At 1 it is as strong as the picture.
+**QRM Level**: the carrier's strength, **0 to 1**, default 0. At 1 it's as strong as the picture.
 It beats with the picture's tones and drags the discriminator with it, and the picture fills with
 fine stripes. Tuning QRM Freq changes the stripes.
 
 **Audio**: the audio input. Resolume hands an effect its audio as a **spectrum of 64 bins**, not
-as a waveform, and fills this in itself; there is nothing to set.
+as a waveform, and fills this in itself; there's nothing to set.
 
 **Audio QRM**: how much of that audio goes on air, **0 to 1**, default 0. It goes on as **noise
 shaped by the spectrum**, so the music lands in the picture wherever its spectrum overlaps the
 picture's 1500 to 2300 Hz. At 1, a flat full-scale spectrum is interference as strong as the
 picture. A kick drum is mostly below the picture's band; hats and vocals are in it.
 
-**Bin Spacing**: **Linear** or **Log** (the default). How Resolume spreads its 64 bins over the
-audio has never been measured, so this is the assumption, exposed:
+**Bin Spacing**: **Linear** or **Log** (the default). Nobody's measured how Resolume spreads its 64 bins
+over the audio, so this is the assumption, out in the open:
 
 - **Linear**: the bins are 344.5 Hz wide, from 0 to 22.05 kHz. The picture's band is bins 4 to 6,
   so the bottom of the spectrum, where a kick lives, lands in the picture.
@@ -261,7 +263,7 @@ send each line's colour as three scans, green, blue, red, so as the lean pulls a
 start of each scan picks up the end of the one before it: a coloured fringe down the leading edge,
 and a coloured wedge down the side of the picture.
 
-**Slant Correct**: a correction subtracted from Clock Error, **−300 to +300 ppm**, default 0. It is
+**Slant Correct**: a correction subtracted from Clock Error, **−300 to +300 ppm**, default 0. It's
 the slant adjustment in real decoders. Set it equal to Clock Error and the picture stands up
 straight. What the receiver runs at is Clock Error minus Slant Correct, so turning either one
 moves the same lean.
@@ -271,10 +273,10 @@ moves the same lean.
 ## The Display group
 
 **Cursor**: on by default. A green line marks the row **below** the one arriving, so the pixels
-arriving stay visible. It is always at least one output pixel tall, at any composition size.
+arriving stay visible. It's always at least one output pixel tall, at any composition size.
 
 **Aspect**: **Fit** (the default) or **Fill**. Every mode is shown 4:3, as decoders show them
-(Martin's and Scottie's pixels are not square).
+(Martin's and Scottie's pixels aren't square).
 
 - **Fit**: the largest 4:3 box that fits, centred. The surround is transparent, so on a 16:9
   composition the layer below shows either side.
@@ -288,7 +290,7 @@ transparent.
 receiver drops the picture it was painting and waits for that header. The picture on screen stays
 until the new one paints over it.
 
-If the header does not decode (too much noise, fading or interference at that moment), the
+If the header doesn't decode (too much noise, fading or interference at that moment), the
 receiver does what an operator does and starts the picture by hand: two lines in, from the
 station's own timing. So below the threshold you still get a picture, of streaks, rather than a
 frozen screen, and it lands exactly where a decoded one would have.
@@ -331,7 +333,7 @@ Resolume's render thread and scales with how many samples a frame is worth. With
 QRM Level and Audio QRM all up, the radio alone takes about 3.7 ms a frame at 120x. The two GPU
 passes are small at any size.
 
-Nothing was timed inside Resolume, and nothing was timed on Windows.
+I haven't timed it inside Resolume, or on Windows.
 
 ---
 
@@ -368,8 +370,8 @@ Try the other Bin Spacing.
 **A switch of Mode takes a moment.** A mode change applies to the next picture, as a station's
 would. Press Restart to start it now.
 
-**The effect does nothing at all.** A shader that will not compile looks exactly like that. The
-real message is in the log:
+**The effect does nothing at all.** A shader that won't compile looks just like that. The
+actual message is in the log:
 
 ```
 macOS    ~/Library/Logs/slowscan/slowscan.YYYY-MM-DD.log
@@ -377,7 +379,7 @@ Windows  %LOCALAPPDATA%\slowscan\logs\slowscan.YYYY-MM-DD.log
 ```
 
 It records the GL vendor and version at load, which shader failed if one did, whether the
-buffers could not be allocated, and which unit (seconds or milliseconds) it decided the host's
+buffers couldn't be allocated, and which unit (seconds or milliseconds) it decided the host's
 clock is in.
 
 ---
@@ -397,22 +399,22 @@ clock is in.
   and a one-pole lowpass. MMSSTV and QSSTV differ in their filters and sync detection.
 - **A failed header is started by hand**, from the station's timing, as an operator pressing
   Start at exactly the right moment. A real decoder without a header waits, or searches for the
-  picture's start; this one does not search.
+  picture's start; this one doesn't search.
 - **Three modes.** No Martin M2, Scottie S2/DX, Robot 72 or PD modes.
 - **Up to 3.7 ms of CPU a frame** at 120x with everything on, on Resolume's render thread. On a
-  busy show machine that may be too much; lower Speed.
+  busy show machine that might be too much, in which case lower Speed.
 - **No presets** and no OpenFX version.
 
 ---
 
 ## About
 
-The last group, **About**, carries the plugin's name, version, licence and maker, and buttons
+The last group, **About**, has the plugin's name, version, licence and maker, and buttons
 that open this guide, the project page, the source on GitHub and the support page in your
 browser.
 
 ## Reporting something
 
-[github.com/stoatworks-labs/slowscan/issues](https://github.com/stoatworks-labs/slowscan/issues).
-A screenshot, the Mode, Speed and Channel settings, your Resolume version, and the day's log are
-usually enough.
+Open an issue at [github.com/stoatworks-labs/slowscan/issues](https://github.com/stoatworks-labs/slowscan/issues).
+A screenshot, the Mode, Speed and Channel settings, your Resolume version and the day's log are
+usually enough to go on.

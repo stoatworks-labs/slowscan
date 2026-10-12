@@ -1,38 +1,30 @@
 # slowscan
 
 > **AI-assisted project.** This codebase was created with [Claude](https://claude.com/claude-code)
-> (Anthropic), directed and reviewed by a human author. The radio is not asserted
-> but measured: an offline harness drives the real plugin class and the real signal
-> chain it owns, and checks each claim against its closed form. Every line, segment
-> and pixel boundary of Martin M1, Scottie S1 and Robot 36 lands on its constant to
-> the sample over a whole frame. A clock error of *e* leans a vertical edge by
-> `e × T_line / T_pixel` pixels a line, fitted in the decoder's picture and again in
-> the rendered frame at two rasters. Above the FM threshold the pixel noise is the
-> linearised discriminator's closed form to 2%, and the knee is where Rice's click
-> rate puts it. The VIS header decodes back to the mode it was sent in, Line Sync
-> takes a 75-pixel slant down to a quarter of a pixel, and Speed changes nothing
-> per sample, bit for bit. Fourteen negative controls prove the checks can fail. It
-> has **never been loaded into Resolume on macOS**, where it is loaded by
-> [oxbow](https://github.com/stoatworks-labs/oxbow), which is a real FFGL host and
-> is not Resolume. On Windows, a build of v0.1.0 loads, registers and renders in
-> Resolume Arena 7.27.1 with every control as declared, on software rendering. See
-> [Status](#status).
+> (Anthropic), directed and reviewed by a human author. It's **never been loaded into
+> Resolume on macOS**, where it's loaded by [oxbow](https://github.com/stoatworks-labs/oxbow),
+> which is a real FFGL host but isn't Resolume. On Windows, a build of v0.1.0 loads, registers
+> and renders in Resolume Arena 7.27.1 with every control as declared, on software rendering.
+> Everything else is measured by an offline harness that drives the real plugin class and the
+> signal chain it owns and checks each claim against its closed form, with fourteen negative
+> controls to show the checks can fail. The full rundown is under [Status](#status).
 
 Slow-scan television over HF, as an FFGL effect for [Resolume](https://resolume.com)
-Arena and Avenue.
+Arena and Avenue. Your clip goes out as audio tones, crosses a noisy, fading HF path, and
+gets painted back a line at a time by a receiver whose clock is a touch off.
 
 ![A test card received over a fading HF path: the new picture overwriting the old from the top with a green cursor on the arriving line, a slant from a receiver clock 60 ppm off, noise streaks, and a colour fringe down the left edge where the slant has pulled the end of one scan into the start of the next](docs/hero.png)
 
-<sub>One frame, rendered by `sstest`, the offline harness — not captured from
+<sub>One frame, rendered by `sstest`, the offline harness, rather than captured from
 Resolume. Martin M1 at 40x through a 15 dB channel with deep fading and a receiver
-clock 60 ppm fast. The card scrolls, so the picture arriving (above the cursor) is
-not the picture it is overwriting (below it).</sub>
+clock 60 ppm fast. The card scrolls, so the picture arriving (above the cursor) isn't
+the picture it's overwriting (below it).</sub>
 
-**[Try it in your browser](https://slowscan-demo.stoatworks-labs.com)** — the
-plugin's own readback and compose shaders in WebGL2, around a JavaScript port of
-its whole signal chain: the station, the HF channel and the decoder. It is a port
-and not the plugin, and it has no audio input: read what
-[the page itself says it does not reproduce](https://slowscan-demo.stoatworks-labs.com).
+**[Try it in your browser](https://slowscan-demo.stoatworks-labs.com)**: the
+plugin's own readback and compose shaders in WebGL2, wrapped round a JavaScript port of
+its whole signal chain (the station, the HF channel and the decoder). It's a port
+rather than the plugin, and it has no audio input, so have a read of what
+[the page itself says it doesn't reproduce](https://slowscan-demo.stoatworks-labs.com).
 
 <!-- downloads:start -->
 
@@ -70,8 +62,8 @@ macOS builds are signed and notarised and open normally. The Windows builds are 
 
 Slow-scan television sends a still picture down a voice radio channel as audio. Each
 pixel is a tone, 1500 Hz for black to 2300 Hz for white, sent a line at a time, with
-a 1200 Hz pulse between lines. A Martin M1 picture takes almost two minutes. At the
-other end an FM discriminator turns the tones back into brightness, and the decoder
+a 1200 Hz pulse between lines. A Martin M1 picture takes almost two minutes, which is long
+enough to put the kettle on. At the other end an FM discriminator turns the tones back into brightness, and the decoder
 paints each line as it arrives.
 
 The plugin builds the actual chain, **source → tones → HF channel → discriminator →
@@ -81,34 +73,34 @@ whatever the receiver made of it.
 
 ## What falls out
 
-None of these is drawn. Each is the chain doing what it does:
+None of this is drawn. It's all the chain doing what it does:
 
 - **Slant.** The receiver times lines from its own sound-card clock. If that clock
   is a few ppm off, each line starts a fraction of a pixel early or late, and a
   vertical edge leans by `e × T_line / T_pixel` pixels a line: 0.29 at 300 ppm in
   Martin M1. `Slant Correct` subtracts a set ppm, as the decoders' slant adjustment
-  does. `Line Sync` re-anchors every line on its 1200 Hz pulse and the lean goes.
+  does. `Line Sync` re-anchors every line on its 1200 Hz pulse and the lean goes away.
 - **Colour fringes on the slanted edge.** Martin sends green, blue and red one after
   another. When the slant pulls a line early, the start of each colour scan picks
   up the end of the one before it.
 - **Progressive arrival.** The new picture overwrites the old one from the top, a
   line at a time, and the line arriving is marked by the cursor.
 - **Noise streaks.** Below the FM threshold, around 3 dB SNR in 3 kHz here, the
-  discriminator starts throwing clicks, whole-cycle phase slips, and the picture
+  discriminator starts throwing clicks (whole-cycle phase slips) and the picture
   turns to streaks.
 - **Horizontal smear.** `Rx Bandwidth` is the discriminator's lowpass. Narrow it and
   edges smear to the right over its time constant.
-- **Fading.** A seeded Clarke model with a Doppler spread of `Fade Rate`. FM does
-  not dim in a fade: a fade takes the SNR with it, so it shows as a band of noisy
+- **Fading.** A seeded Clarke model with a Doppler spread of `Fade Rate`. FM doesn't
+  dim in a fade: a fade takes the SNR with it, so it shows up as a band of noisy
   lines.
 - **Ghosts and combing.** A second path at `Multipath` ms interferes with the first.
 - **Vertical stripes.** A carrier on frequency (`QRM Freq`, `QRM Level`) beats with
   the picture tones and drags the discriminator with it.
 - **Audio is interference.** Resolume hands an effect 64 FFT bins, not a waveform.
   So the audio routed into the plugin goes on air as noise shaped by those bins,
-  and the music lands in the picture where its spectrum overlaps the SSTV band.
+  and the music lands in the picture wherever its spectrum overlaps the SSTV band.
 
-`Speed` runs the two-minute picture in as little as a second. It only changes how
+`Speed` runs the two-minute picture in as little as a second. All it changes is how
 many samples a video frame is worth. Every process is defined per sample, and the
 harness proves that 24 lines of a noisy, fading picture come out bit-identical at 1x
 and at 120x.
@@ -116,22 +108,25 @@ and at 120x.
 ### The honest limit
 
 Audio interference is noise shaped by the host's spectrum, because a spectrum is all
-the host gives. Nobody has measured how Resolume lays out its 64 bins, so
+the host gives you. Nobody has measured how Resolume lays out its 64 bins, so
 `Bin Spacing` exposes the assumption (Linear to 22.05 kHz, or Log from 20 Hz to 20
 kHz), and the bins are read as magnitudes. The fading is flat. The HF channel is one
-path, or two, and not the multi-tap ionospheric model a propagation lab would use.
+path, or two, rather than the multi-tap ionospheric model a propagation lab would use.
 The receiver is one decoder design (analytic bandpass, phase-difference
 discriminator, one-pole lowpass), not MMSSTV's or QSSTV's. When a header fails to
 decode, the receiver starts the picture from the station's own clock two lines in,
-as an operator would press Start. It does not search for the picture's start by
+the way an operator would press Start. It doesn't search for the picture's start by
 correlation.
 
-[![Slowscan — slow-scan television over HF, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=LmPvFRQsDWI)
+[![Slowscan: slow-scan television over HF, for Resolume](docs/video-thumb.png)](https://www.youtube.com/watch?v=LmPvFRQsDWI)
 
-*[Watch it](https://www.youtube.com/watch?v=LmPvFRQsDWI) — 63 seconds: pictures arriving line by line under the cursor, SNR falling through the FM threshold into streaks, a fade taking the SNR with it, a multipath echo on every edge, a 250 ppm clock leaning the picture and Slant Correct taking it off, a QRM carrier tuned across the picture's tones, the audio going on air, and a switch to Robot 36. Every frame is the real plugin's output: an FFGL plugin has no window,
-so the footage is rendered by this repository's own offline harness
-(`sstest --pipe`, driven by a cue sheet) rather than filmed off a screen, and
-the clips are Resolume's bundled demo media.*
+*[Watch it](https://www.youtube.com/watch?v=LmPvFRQsDWI) (63 seconds): pictures arriving line
+by line under the cursor, SNR falling through the FM threshold into streaks, a fade taking the
+SNR with it, a multipath echo on every edge, a 250 ppm clock leaning the picture and Slant
+Correct taking it off, a QRM carrier tuned across the picture's tones, the audio going on air,
+and a switch to Robot 36. It's all the plugin's own output. An FFGL plugin doesn't have a window
+to film, so the footage comes from this repo's offline harness (`sstest --pipe`, driven by a cue
+sheet) rather than off a screen, and the clips are Resolume's bundled demo media.*
 
 ## Controls
 
@@ -142,17 +137,17 @@ the clips are Resolume's bundled demo media.*
 | **Receiver** | Rx Bandwidth (100 Hz–3 kHz discriminator lowpass), Sync (Free-run or Line Sync), Clock Error (±300 ppm), Slant Correct (±300 ppm, subtracted). |
 | **Display** | Cursor, Aspect (Fit, a 4:3 box with a transparent surround; Fill, stretched), Mix, Restart (a new picture now). |
 
-The defaults are a picture every three seconds (Martin M1 at 40x) over a clean-ish
+The defaults give you a picture every three seconds (Martin M1 at 40x) over a clean-ish
 25 dB path with some slow fading, and a receiver clock 30 ppm fast, so the picture
 leans a little.
 
 ## Status
 
-**v0.1.0, and honestly early. 23 September 2026.**
+**v0.1.0, 23 September 2026, and still early days.**
 
 ### Measured offline, on macOS
 
-`tools/verify.sh` passes on this machine (M4 Max, macOS 26.4.1) against a fresh
+`tools/verify.sh` passes on this Mac (M4 Max, macOS 26.4.1) against a fresh
 universal Release build, running every check at **two rasters**, 320×180 and
 1280×720. What it establishes, in numbers:
 
@@ -177,10 +172,10 @@ universal Release build, running every check at **two rasters**, 320×180 and
 Render cost at the defaults (40x), best of three runs of 60 frames after a warm-up,
 `glFinish` both sides, on a GPU and CPU shared with other work: **1.04 ms** at 720p,
 **1.02 ms** at 1080p, **1.04 ms** at 4K. The cost is nearly all the CPU signal
-chain, which does not care about the output size. It scales with Speed: **0.29 ms**
+chain, which doesn't care about the output size. It scales with Speed: **0.29 ms**
 a frame at 1x and **2.58 ms** at 120x (1080p). The chain alone runs 11 million samples
 a second at the defaults, 6 million with everything on (multipath, QRM, audio). At
-120x that is 2.0 ms and 3.7 ms of CPU a frame, on the host's render thread.
+120x that's 2.0 ms and 3.7 ms of CPU a frame, on the host's render thread.
 macOS figures only.
 
 ### In Resolume, on Windows
@@ -190,12 +185,12 @@ v0.1.0 loads from Extra Effects, registers as `SW Slowscan` / `SS01` / effect, a
 host controls match the declaration in name, order, type, range and default, it
 renders, and Arena's log stays clean: 9 of 9 of the fleet gate's checks. 18 controls
 moved the picture, 4 of them under a precondition. The three audio-driven controls,
-Audio, Audio QRM and Bin Spacing, could not be tested, because win-lab has no sound
+Audio, Audio QRM and Bin Spacing, couldn't be tested, because win-lab has no sound
 device. Software rendering says nothing about a GPU or about speed.
 
 ### Not established
 
-It has **never been loaded into Resolume on macOS**. Everything above the Windows
+It's **never been loaded into Resolume on macOS**. Everything above the Windows
 section was compiled, rendered and measured offline against the real plugin class in
 a headless CGL context, plus an `oxbow` load. Still untested:
 
@@ -205,16 +200,16 @@ a headless CGL context, plus an `oxbow` load. Still untested:
 - whether 3.7 ms of CPU a frame at 120x is comfortable on a busy show machine;
 - what the host's real clock does over a long session.
 
-Nothing has been through a show.
-There is no OpenFX port; it was not in scope for 0.1.0. The browser demo, linked at
+It hasn't been through a show yet.
+There's no OpenFX port; it wasn't in scope for 0.1.0. The browser demo, linked at
 the top, runs the plugin's shaders over a hand port of its signal chain, and
-nothing checks a port but a reader.
+nothing checks a port except somebody reading it.
 
 The [user guide](docs/USER-GUIDE.md) covers every control, what it does and why.
 
 ## Build
 
-Needs CMake 3.15+, a C++17 compiler, and the FFGL SDK submodule.
+You'll need CMake 3.15+, a C++17 compiler and the FFGL SDK submodule.
 
 ```bash
 git clone --recursive https://github.com/stoatworks-labs/slowscan
@@ -245,7 +240,7 @@ python3 tools/sweep.py                                 # no control is silently 
 tools/verify.sh                                        # all of it, on a fresh universal build
 ```
 
-Every check takes `--size`. Run the rendered ones at 320×180 as well as the raster
+Every check takes `--size`. Run the rendered ones at 320×180 as well as whatever raster
 you care about. `--offline` runs everything that needs no GL, which is what CI does.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full command reference and
