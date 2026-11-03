@@ -8,16 +8,42 @@
     <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./vendor/kit.css" />
     <link rel="canonical" href="https://slowscan-demo.stoatworks-labs.com/" />
+    <meta name="project-page" content="https://stoatworks-labs.com/software/slowscan/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Stoatworks Labs" />
+    <meta property="og:title" content="Slowscan — browser demo | Stoatworks Labs" />
+    <meta property="og:description" content="Try the Slowscan slow-scan television FFGL plugin for Resolume in your browser. The plugin's own readback and compose shaders ported to WebGL2, with its SSTV transmitter, HF channel and FM decoder ported to JavaScript." />
+    <meta property="og:url" content="https://slowscan-demo.stoatworks-labs.com/" />
+    <meta property="og:image" content="https://stoatworks-labs.com/thumbs/slowscan.png" />
+    <meta property="og:image:width" content="1280" />
+    <meta property="og:image:height" content="720" />
+    <meta property="og:image:alt" content="Slowscan" />
+    <meta name="twitter:card" content="summary_large_image" />
   </head>
   <body>
     <main id="demo">
       <noscript>
+        <h1>Slowscan</h1>
+        <p>
+          An FFGL effect that sends your clip as slow-scan television (Martin
+          M1, Scottie S1 or Robot 36 tones) through an HF channel with noise,
+          fading, multipath and interference, and paints whatever the receiver
+          manages to decode, a line at a time. The slant from a receiver clock a
+          few ppm out, the colour fringes on it, the noise streaks below the FM
+          threshold and the smear all come from the chain running at 11,025
+          samples a second. None of it is drawn on top.
+        </p>
         <p>
           This demo runs the plugin's shaders and a port of its signal chain in
           your browser, so it needs JavaScript and WebGL2. The plugin itself,
           its source and its downloads are on
           <a href="https://github.com/stoatworks-labs/slowscan">its repository</a>.
         </p>
+        <ul>
+          <li><a href="https://stoatworks-labs.com/software/slowscan/">Project page and downloads</a></li>
+          <li><a href="https://stoatworks-labs.com/software/slowscan/guide/">User guide</a></li>
+          <li><a href="https://github.com/stoatworks-labs/slowscan">Source on GitHub</a></li>
+        </ul>
       </noscript>
     </main>
 

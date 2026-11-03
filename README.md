@@ -13,6 +13,8 @@ Slow-scan television over HF, as an FFGL effect for [Resolume](https://resolume.
 Arena and Avenue. Your clip goes out as audio tones, crosses a noisy, fading HF path, and
 gets painted back a line at a time by a receiver whose clock is a touch off.
 
+The [project page](https://stoatworks-labs.com/software/slowscan/) has the downloads, the [user guide](https://stoatworks-labs.com/software/slowscan/guide/) and the video.
+
 ![A test card received over a fading HF path: the new picture overwriting the old from the top with a green cursor on the arriving line, a slant from a receiver clock 60 ppm off, noise streaks, and a colour fringe down the left edge where the slant has pulled the end of one scan into the start of the next](docs/hero.png)
 
 <sub>One frame, rendered by `sstest`, the offline harness, rather than captured from
